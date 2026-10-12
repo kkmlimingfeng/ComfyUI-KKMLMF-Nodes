@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-prompt-tag-editor"
-description = "Interactive prompt tag editor: tag chips with hover weight/delete, double-click edit, press-and-drag reorder, click to disable tags, plus Tencent Hy-MT2-1.8B GGUF translation."
-version = "1.1.0"
+description = "Interactive prompt tag editor: tag chips with hover weight/delete, double-click edit, press-and-drag reorder, click to disable tags, Tencent Hy-MT2-1.8B GGUF translation, load image from path, and a multi reroute node (1-20 pass-through rows with type auto-naming)."
+version = "1.2.0"
 license = { file = "LICENSE" }
 dependencies = []
 
