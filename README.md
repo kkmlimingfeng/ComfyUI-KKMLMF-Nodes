@@ -1,4 +1,4 @@
-# ComfyUI Prompt Tag Editor
+﻿# ComfyUI Prompt Tag Editor
 
 [English](./README.md) | [中文](./README-zh.md)
 
@@ -39,7 +39,7 @@ Custom Nodes Manager → search **Prompt Tag Editor** → Install.
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/kkmlimingfeng/Comfyui_Prompt_Tag_Editor
+git clone https://github.com/kkmlimingfeng/KKMLMF-Nodes
 ```
 
 Restart ComfyUI.

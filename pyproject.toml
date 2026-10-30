@@ -6,8 +6,8 @@ license = { file = "LICENSE" }
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/kkmlimingfeng/Comfyui_Prompt_Tag_Editor"
-Issues = "https://github.com/kkmlimingfeng/Comfyui_Prompt_Tag_Editor/issues"
+Repository = "https://github.com/kkmlimingfeng/KKMLMF-Nodes"
+Issues = "https://github.com/kkmlimingfeng/KKMLMF-Nodes/issues"
 
 [tool.comfy]
 PublisherId = "kkmlimingfeng"

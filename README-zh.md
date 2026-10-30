@@ -1,4 +1,4 @@
-# ComfyUI 提示词标签编辑器（Prompt Tag Editor）
+﻿# ComfyUI 提示词标签编辑器（Prompt Tag Editor）
 
 [English](./README.md) | [中文](./README-zh.md)
 
@@ -38,7 +38,7 @@ ComfyUI 交互式提示词/标签编辑节点，可选本地翻译功能，由�
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/kkmlimingfeng/Comfyui_Prompt_Tag_Editor
+git clone https://github.com/kkmlimingfeng/KKMLMF-Nodes
 ```
 
 重启 ComfyUI。
