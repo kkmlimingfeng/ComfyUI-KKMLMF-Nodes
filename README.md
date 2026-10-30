@@ -33,7 +33,7 @@ Built on the modern `comfy_api.latest` / `ComfyExtension` (V3) node API — requ
 
 ### Via ComfyUI-Manager (recommended)
 
-Custom Nodes Manager → search **KKMLMF Nodes** → Install.
+Custom Nodes Manager → search **KKMLMF** or **Prompt Tag Editor** → Install.
 
 ### Manual
 
@@ -90,7 +90,7 @@ pip install llama-cpp-python
 
 ## Usage
 
-1. Add the node from **Prompt Tools → Prompt Tag Editor** (or type prompt directly).
+1. Add the node from **KKMLMF-Nodes → Prompt Tag Editor** (or type prompt directly).
 2. Edit tags as chips; type in the textarea to add tags.
 3. Hover a chip → popup with title / weight / delete.
 4. Toggle **自动 (auto)** to translate automatically after edits, or press the **↻** button.

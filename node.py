@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 import json
 import os
 from pathlib import Path
@@ -67,7 +67,7 @@ class PromptTagEditor(io.ComfyNode):
         return io.Schema(
             node_id="PromptTagEditor",
             display_name="Prompt Tag Editor",
-            category="Prompt Tools",
+            category="KKMLMF-Nodes",
             description="Interactive synchronized prompt/tag editor with optional Hy-MT2 translation.",
             inputs=[
                 io.String.Input(
@@ -115,7 +115,7 @@ class PromptTagEditorPlus(io.ComfyNode):
         return io.Schema(
             node_id="PromptTagEditorPlus",
             display_name="Prompt Tag Editor Plus",
-            category="Prompt Tools",
+            category="KKMLMF-Nodes",
             description="Prompt Tag Editor with tag suggestions: type English or Chinese in the "
                         "prompt box to get the most-used matching tags, click one to insert it.",
             inputs=[
@@ -208,7 +208,7 @@ class LoadImageFromPath(io.ComfyNode):
         return io.Schema(
             node_id="LoadImageFromPath",
             display_name="Load Image From Path",
-            category="Prompt Tools",
+            category="KKMLMF-Nodes",
             description="Load an image (and optional alpha mask) from an arbitrary file path.",
             inputs=[
                 io.String.Input(

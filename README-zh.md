@@ -32,7 +32,7 @@ ComfyUI 交互式提示词/标签编辑节点，可选本地翻译功能，由�
 
 ### 通过 ComfyUI-Manager（推荐）
 
-自定义节点管理器 → 搜索 **KKMLMF Nodes** → 安装。
+自定义节点管理器 → 搜索 **KKMLMF** 或 **Prompt Tag Editor** → 安装。
 
 ### 手动安装
 
@@ -87,7 +87,7 @@ pip install llama-cpp-python
 
 ## 使用方法
 
-1. 从 **Prompt Tools → Prompt Tag Editor** 添加节点（或直接在输入框里粘贴提示词）。
+1. 从 **KKMLMF-Nodes → Prompt Tag Editor** 添加节点（或直接在输入框里粘贴提示词）。
 2. 以 chip 形式编辑标签；在输入框里输入即可新增标签。
 3. 悬停 chip → 弹窗显示标题 / 权重 / 删除。
 4. 打开**自动**开关可在编辑后自动翻译，或点击 **↻** 按钮手动翻译。

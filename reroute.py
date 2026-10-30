@@ -1,4 +1,4 @@
-"""Multi Reroute: a stack of N reroute rows in one node.
+﻿"""Multi Reroute: a stack of N reroute rows in one node.
 
 Each row i is an independent pass-through channel: input "route i" → output
 "route i". The backend declares MAX_ROUTES optional wildcard inputs and
@@ -31,7 +31,7 @@ class MultiReroute(io.ComfyNode):
         return io.Schema(
             node_id="MultiReroute",
             display_name="Multi Reroute",
-            category="Prompt Tools",
+            category="KKMLMF-Nodes",
             description="A stack of independent reroute rows. Set the row count "
                         "with the routes widget; each row passes its input through "
                         "to the matching output.",
