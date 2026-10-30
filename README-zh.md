@@ -1,4 +1,4 @@
-﻿# ComfyUI 提示词标签编辑器（Prompt Tag Editor）
+﻿# ComfyUI KKMLMF Nodes（提示词标签编辑器等）
 
 [English](./README.md) | [中文](./README-zh.md)
 
@@ -32,13 +32,13 @@ ComfyUI 交互式提示词/标签编辑节点，可选本地翻译功能，由�
 
 ### 通过 ComfyUI-Manager（推荐）
 
-自定义节点管理器 → 搜索 **Prompt Tag Editor** → 安装。
+自定义节点管理器 → 搜索 **KKMLMF Nodes** → 安装。
 
 ### 手动安装
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/kkmlimingfeng/KKMLMF-Nodes
+git clone https://github.com/kkmlimingfeng/ComfyUI-KKMLMF-Nodes
 ```
 
 重启 ComfyUI。

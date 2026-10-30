@@ -59,7 +59,7 @@ def _download_model(dest):
                 downloading=True, downloaded=0, total=0, error=None, source=url
             )
             req = urllib.request.Request(
-                url, headers={"User-Agent": "comfyui-prompt-tag-editor"}
+                url, headers={"User-Agent": "comfyui-kkmlmf-nodes"}
             )
             with urllib.request.urlopen(req, timeout=30) as resp, open(tmp, "wb") as f:
                 total = int(resp.headers.get("Content-Length") or 0)

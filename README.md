@@ -1,4 +1,4 @@
-﻿# ComfyUI Prompt Tag Editor
+﻿# ComfyUI KKMLMF Nodes
 
 [English](./README.md) | [中文](./README-zh.md)
 
@@ -33,13 +33,13 @@ Built on the modern `comfy_api.latest` / `ComfyExtension` (V3) node API — requ
 
 ### Via ComfyUI-Manager (recommended)
 
-Custom Nodes Manager → search **Prompt Tag Editor** → Install.
+Custom Nodes Manager → search **KKMLMF Nodes** → Install.
 
 ### Manual
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/kkmlimingfeng/KKMLMF-Nodes
+git clone https://github.com/kkmlimingfeng/ComfyUI-KKMLMF-Nodes
 ```
 
 Restart ComfyUI.
