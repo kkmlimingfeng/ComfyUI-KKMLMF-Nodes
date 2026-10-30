@@ -103,6 +103,26 @@ def get_model_status():
     }
 
 
+def unload_model():
+    """Drop the loaded GGUF model and release its memory (incl. VRAM).
+
+    Used when the editor switches to the CSV-based translation mode, which
+    never needs the model."""
+    global _llm, _model_path
+    _llm = None
+    _model_path = None
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def _load_model():
     global _llm, _model_path
 

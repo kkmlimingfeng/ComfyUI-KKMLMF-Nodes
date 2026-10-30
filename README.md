@@ -18,7 +18,13 @@ Built on the modern `comfy_api.latest` / `ComfyExtension` (V3) node API — requ
   list (grayed out) but are excluded from the prompt and outputs
 - Translated tag chips with per-language cache; untranslated chips shown dashed
 - **Auto-translate** toggle: missing translations are filled automatically after edits
-- 8 target languages: Chinese / Japanese / Korean / English / French / German / Spanish / Russian
+- **Chinese (CSV)** language option (default): translates tags by looking them
+  up in the dataset CSVs — instant, no model, and switching to it unloads the
+  translation model; tags with no dataset entry show red "untranslatable"
+- **Underscore → space** toggle: when on, every `_` in the prompt (typed,
+  pasted or inserted from suggestions) becomes a space
+- 8 model-backed target languages: Chinese / Japanese / Korean / English /
+  French / German / Spanish / Russian (loaded on demand, as before)
 - Lazy-loaded `Hy-MT2-1.8B-Q4_K_M` GGUF, full GPU offload (`n_gpu_layers=-1`), batched request with per-item fallback and translation cache
 
 ### Outputs

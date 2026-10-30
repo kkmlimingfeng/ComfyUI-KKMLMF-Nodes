@@ -140,9 +140,15 @@ const STYLE = `
    "translation" next to the English tag. */
 .pte-sug-zh { flex:1; min-width:0; overflow-wrap:anywhere; color:var(--input-text,#ddd); opacity:.8; }
 .pte-sug-count { flex:none; opacity:.4; font-size:10px; padding-top:1px; min-width:34px; text-align:right; }
+/* CSV-lookup mode: tags with no dataset entry show red "untranslatable". */
+.pte-box .pte-tag.pte-untrans { color:#e05252; }
+.pte-untrans-note { color:#e05252; white-space:nowrap; }
 `;
 
+const CSV_LANG = "Chinese (CSV)";
+
 const LANGS = [
+  [CSV_LANG, "中文（词库）"],
   ["Chinese", "中文"],
   ["Japanese", "日语"],
   ["Korean", "韩语"],
@@ -250,12 +256,20 @@ function createTag(node, tag, index, translated) {
   el.className = "pte-tag";
   el.dataset.index = String(index);
   el.dataset.uid = tag.id;
-  const label = translated ? (tag.translation || tag.text) : tag.text;
+  // CSV-lookup mode with no dataset hit: the translated chip shows red
+  // "无法翻译" and behaves like a normal tag (drag / disable / delete) but
+  // has no weight control and cannot be edited.
+  const csvUnmatched = translated && !(tag.translation || "").trim()
+    && node.__pte.lang?.value === CSV_LANG;
+  const label = csvUnmatched ? "无法翻译"
+    : (translated ? (tag.translation || tag.text) : tag.text);
   const missing = translated && !(tag.translation || "").trim();
-  if (missing) el.classList.add("pte-missing");
+  if (csvUnmatched) el.classList.add("pte-untrans");
+  else if (missing) el.classList.add("pte-missing");
   if (tag.disabled) el.classList.add("pte-disabled");
   el.textContent = label;
-  el.title = missing ? "未翻译" : label;
+  el.title = csvUnmatched ? "无法翻译（词库中无对应词条）"
+    : (missing ? "未翻译" : label);
 
   const pte = node.__pte;
 
@@ -400,16 +414,29 @@ function createTag(node, tag, index, translated) {
 
   const pop = document.createElement("div");
   pop.className = "pte-pop";
-  pop.innerHTML = `
-    <div class="pte-pop-box">
-      <div class="pte-pop-title"></div>
-      <div class="pte-pop-row">
-        <span>Weight</span>
-        <input type="number" min="0.1" max="10" step="0.05">
-        <button type="button" title="删除">×</button>
+  if (csvUnmatched) {
+    // No weight control, no edit — only the untranslatable notice + delete.
+    pop.innerHTML = `
+      <div class="pte-pop-box">
+        <div class="pte-pop-title"></div>
+        <div class="pte-pop-row">
+          <span class="pte-untrans-note">无法翻译（词库无对应词条）</span>
+          <button type="button" title="删除">×</button>
+        </div>
       </div>
-    </div>
-  `;
+    `;
+  } else {
+    pop.innerHTML = `
+      <div class="pte-pop-box">
+        <div class="pte-pop-title"></div>
+        <div class="pte-pop-row">
+          <span>Weight</span>
+          <input type="number" min="0.1" max="10" step="0.05">
+          <button type="button" title="删除">×</button>
+        </div>
+      </div>
+    `;
+  }
   pop.querySelector(".pte-pop-title").textContent = label;
 
   // Interactions inside the popup must not reach the tag itself:
@@ -419,13 +446,15 @@ function createTag(node, tag, index, translated) {
   pop.addEventListener("pointerdown", e => e.stopPropagation());
 
   const weightInput = pop.querySelector("input");
-  weightInput.value = Number(tag.weight).toFixed(2);
-  // Only sync text here (no rebuild): rebuilding would destroy the popup DOM
-  // under the pointer and close it while the spinner arrows are clicked.
-  weightInput.addEventListener("input", e => {
-    tag.weight = Number(e.target.value) || 1;
-    node.__pte.syncText();
-  });
+  if (weightInput) {
+    weightInput.value = Number(tag.weight).toFixed(2);
+    // Only sync text here (no rebuild): rebuilding would destroy the popup DOM
+    // under the pointer and close it while the spinner arrows are clicked.
+    weightInput.addEventListener("input", e => {
+      tag.weight = Number(e.target.value) || 1;
+      node.__pte.syncText();
+    });
+  }
 
   pop.querySelector("button").addEventListener("click", e => {
     e.stopPropagation();
@@ -433,9 +462,10 @@ function createTag(node, tag, index, translated) {
     node.__pte.render();
   });
 
-  // Double click edits the tag text.
+  // Double click edits the tag text (not for untranslatable CSV chips).
   el.addEventListener("dblclick", e => {
     e.stopPropagation();
+    if (csvUnmatched) return;
     const value = window.prompt("编辑 Tag", label);
     if (value == null) return;
     if (translated) tag.translation = value.trim();
@@ -618,7 +648,9 @@ function setupSuggest(node, state, nativeDataset) {
     if (!p) return;
     const text = promptEl.value;
     const inserted = it.name + ", ";
-    const next = text.slice(0, p.start) + inserted + text.slice(p.end);
+    const next = state.applyUnderscore
+      ? state.applyUnderscore(text.slice(0, p.start) + inserted + text.slice(p.end))
+      : text.slice(0, p.start) + inserted + text.slice(p.end);
     state.suppressInput = true;
     promptEl.value = next;
     state.suppressInput = false;
@@ -697,6 +729,8 @@ function build(node, opts = {}) {
     <div class="pte-inner">
       <div class="pte-row">
         <div class="pte-label">原始提示词</div>
+        <label class="pte-auto" title="开启后，提示词中的所有下划线会替换成空格">
+          <input type="checkbox" class="pte-under-check">下划线转空格</label>
         <select class="pte-ds-select" style="display:none" title="联想数据集（输入时匹配的词库）"></select>
       </div>
       <textarea class="pte-textarea" rows="3" placeholder="1girl, long hair, blue eyes, white dress..."></textarea>
@@ -762,6 +796,7 @@ function build(node, opts = {}) {
     original: root.querySelector(".pte-original"),
     translated: root.querySelector(".pte-translated"),
     lang: root.querySelector(".pte-lang"),
+    underCheck: root.querySelector(".pte-under-check"),
     autoCheck: root.querySelector(".pte-auto-check"),
     translateButton: root.querySelector(".pte-translate"),
     status: root.querySelector(".pte-status"),
@@ -1032,7 +1067,8 @@ function build(node, opts = {}) {
         if (tr) filled++;
       });
       state.render();
-      setStatus(`翻译完成 · ${filled}/${state.tags.length} 个标签`);
+      const mode = state.lang.value === CSV_LANG ? "（词库）" : "";
+      setStatus(`翻译完成${mode} · ${filled}/${state.tags.length} 个标签`);
     } catch (err) {
       console.error("[PromptTagEditor]", err);
       setStatus("翻译失败：" + err.message);
@@ -1065,6 +1101,25 @@ function build(node, opts = {}) {
   };
   state.scheduleAuto = scheduleAuto;
 
+  // ---- underscore → space toggle -----------------------------------------
+  // When on, every underscore in the prompt is replaced by a space — both the
+  // text already present (on toggle) and anything typed/pasted/inserted later.
+  const underCheck = state.underCheck;
+  const applyUnderscore = (text) =>
+    (underCheck?.checked ? String(text).replace(/_/g, " ") : String(text));
+  state.applyUnderscore = applyUnderscore;
+  underCheck?.addEventListener("change", () => {
+    const converted = applyUnderscore(state.prompt.value);
+    if (converted !== state.prompt.value) {
+      state.suppressInput = true;
+      setPromptText(converted);
+      state.suppressInput = false;
+    }
+    state.rebuildFromText(state.prompt.value);
+    state.render();
+    scheduleAuto(900);
+  });
+
   if (opts.suggest) setupSuggest(node, state, nativeDataset);
 
   state.translateButton.addEventListener("click", () => doTranslate());
@@ -1072,6 +1127,11 @@ function build(node, opts = {}) {
     if (nativeLang) nativeLang.value = state.lang.value;
     state.tags.forEach(t => { t.translation = ""; });
     state.render();
+    if (state.lang.value === CSV_LANG) {
+      // CSV lookup never needs the model — free its memory/VRAM.
+      api.fetchApi("/prompt_tag_editor/unload_model", { method: "POST" })
+        .catch(() => { /* best-effort */ });
+    }
     scheduleAuto(300);
   });
   state.autoCheck?.addEventListener("change", () => {
@@ -1081,6 +1141,13 @@ function build(node, opts = {}) {
   // Typing keeps raw text (no cursor fighting); tag ops rebuild everything.
   state.prompt.addEventListener("input", () => {
     if (state.suppressInput) return;
+    // Underscore→space is 1:1, so the caret survives the rewrite.
+    if (underCheck.checked && state.prompt.value.includes("_")) {
+      const converted = state.prompt.value.replace(/_/g, " ");
+      state.suppressInput = true;
+      setPromptText(converted);
+      state.suppressInput = false;
+    }
     state.rebuildFromText(state.prompt.value);
     state.render({ keepRaw: true });
     scheduleAuto(900);
@@ -1089,7 +1156,7 @@ function build(node, opts = {}) {
   // External value changes (e.g. workflow load) → resync the editor.
   if (nativePrompt) {
     nativePrompt.callback = (v) => {
-      const text = String(v ?? "");
+      let text = applyUnderscore(String(v ?? ""));
       // Assigning the native widget's value echoes back through this
       // callback. Ignore echoes describing the tags we already have (e.g.
       // the canonical text pushed while typing), otherwise the rewrite
@@ -1130,7 +1197,10 @@ function build(node, opts = {}) {
     state.suppressInput = true;
     state.prompt.value = text;
     state.suppressInput = false;
-    if (nativeLang && nativeLang.value) state.lang.value = nativeLang.value;
+    if (nativeLang && nativeLang.value &&
+        [...state.lang.options].some(o => o.value === nativeLang.value)) {
+      state.lang.value = nativeLang.value;
+    }
     state.render();
     scheduleAuto(1200);
   };

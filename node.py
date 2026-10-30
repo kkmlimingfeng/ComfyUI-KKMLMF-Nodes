@@ -15,7 +15,7 @@ from comfy_api.latest import ComfyExtension, io
 from server import PromptServer
 
 from .prompt_parser import parse_prompt, serialize_prompt
-from .translator import translate_tags, get_model_status
+from .translator import translate_tags, get_model_status, unload_model
 
 
 def load_saved_tags(raw):
@@ -85,11 +85,14 @@ class PromptTagEditor(io.ComfyNode):
                 io.Combo.Input(
                     "target_language",
                     options=[
-                        "Chinese", "Japanese", "Korean", "English",
+                        CSV_LANGUAGE, "Chinese", "Japanese", "Korean", "English",
                         "French", "German", "Spanish", "Russian",
                     ],
-                    default="Chinese",
-                    tooltip="Language used by the translation result Tags.",
+                    default=CSV_LANGUAGE,
+                    tooltip="Translation backend for the Tags result. "
+                            f"{CSV_LANGUAGE} looks tags up in the data/ CSVs "
+                            "directly (no model); the other options use the "
+                            "Hy-MT2 translation model.",
                 ),
                 io.String.Input(
                     "tags_state",
@@ -134,11 +137,14 @@ class PromptTagEditorPlus(io.ComfyNode):
                 io.Combo.Input(
                     "target_language",
                     options=[
-                        "Chinese", "Japanese", "Korean", "English",
+                        CSV_LANGUAGE, "Chinese", "Japanese", "Korean", "English",
                         "French", "German", "Spanish", "Russian",
                     ],
-                    default="Chinese",
-                    tooltip="Language used by the translation result Tags.",
+                    default=CSV_LANGUAGE,
+                    tooltip="Translation backend for the Tags result. "
+                            f"{CSV_LANGUAGE} looks tags up in the data/ CSVs "
+                            "directly (no model); the other options use the "
+                            "Hy-MT2 translation model.",
                 ),
                 io.String.Input(
                     "dataset",
@@ -391,6 +397,64 @@ def _search_tags(rows, query, limit):
     return [h[2] for h in hits[:limit]]
 
 
+CSV_LANGUAGE = "Chinese (CSV)"  # dataset-driven Chinese, no GGUF model needed
+
+
+def _norm_tag_key(s):
+    """Normalize a tag for dataset lookup: lower-case, underscores become
+    spaces, whitespace collapsed."""
+    return " ".join(s.strip().lower().replace("_", " ").split())
+
+
+_csv_index_cache = {}  # filename -> (rows_object, {normalized tag: Chinese})
+
+
+def _csv_index_for(name):
+    """Build (and cache) a normalized-tag -> Chinese translation index for one
+    dataset. The rows object identity check keeps the index in sync with
+    _load_dataset's mtime cache: when the CSV changes, a fresh rows list is
+    returned and the index is rebuilt."""
+    rows = _load_dataset(name)
+    cached = _csv_index_cache.get(name)
+    if cached and cached[0] is rows:
+        return cached[1]
+
+    index = {}
+    for r in rows:
+        zh = r["zh"] or r["zh_mt"]
+        if not zh:
+            continue
+        for key in [r["name"], *r["aliases"]]:
+            nk = _norm_tag_key(key)
+            if nk and nk not in index:
+                index[nk] = zh
+    _csv_index_cache[name] = (rows, index)
+    return index
+
+
+def csv_translate(texts):
+    """Translate tags via the dataset CSVs only (no model). English tags are
+    matched against name/aliases (first dataset wins, sorted by filename);
+    tags that already contain Chinese are passed through unchanged; unknown
+    tags return an empty string (shown as untranslated)."""
+    datasets = _list_datasets()
+    if not datasets:
+        raise ValueError("data 目录下没有数据集 CSV，无法进行词库直译")
+    out = []
+    for t in texts:
+        if _has_cjk(t):
+            out.append(t.strip())
+            continue
+        key = _norm_tag_key(t)
+        hit = ""
+        for name in datasets:
+            hit = _csv_index_for(name).get(key, "")
+            if hit:
+                break
+        out.append(hit)
+    return out
+
+
 @PromptServer.instance.routes.get("/prompt_tag_editor/datasets")
 async def prompt_tag_editor_datasets(request):
     datasets = _list_datasets()
@@ -434,7 +498,12 @@ async def prompt_tag_editor_translate(request):
         language = data.get("target_language", "Chinese")
 
         texts = [str(t.get("text", "")).strip() for t in tags]
-        translations = await translate_tags(texts, language)
+
+        if language == CSV_LANGUAGE:
+            # Dataset-driven Chinese: pure CSV lookup, never loads the model.
+            translations = csv_translate(texts)
+        else:
+            translations = await translate_tags(texts, language)
 
         return web.json_response({
             "ok": True,
@@ -452,6 +521,14 @@ async def prompt_tag_editor_translate(request):
 @PromptServer.instance.routes.get("/prompt_tag_editor/status")
 async def prompt_tag_editor_status(request):
     return web.json_response(get_model_status())
+
+
+@PromptServer.instance.routes.post("/prompt_tag_editor/unload_model")
+async def prompt_tag_editor_unload_model(request):
+    """Free the translation model — used when switching to CSV translation,
+    which never needs the model loaded."""
+    unload_model()
+    return web.json_response({"ok": True, **get_model_status()})
 
 
 @PromptServer.instance.routes.get("/prompt_tag_editor/browse")
