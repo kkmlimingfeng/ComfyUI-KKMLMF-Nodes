@@ -32,10 +32,16 @@ const STYLE = `
   background:var(--comfy-input-bg,#303030); color:var(--input-text,#ddd);
   cursor:grab; user-select:none; font-size:13px; touch-action:none; }
 .pte-tag:hover { filter:brightness(1.25); border-color:var(--input-text,#999); z-index:10000; }
-.pte-tag.pte-missing { opacity:.45; border-style:dashed; }
+/* No opacity on faded tag states: the hover popup is a child of the tag and
+   would turn see-through with it. Muted colors instead. */
+.pte-tag.pte-missing { border-style:dashed; color:#999; }
 .pte-tag.pte-dragging { opacity:.35; cursor:grabbing; }
-.pte-tag.pte-disabled { opacity:.5; filter:grayscale(.9);
+.pte-tag.pte-disabled { filter:grayscale(.9);
   border-style:dashed; text-decoration:line-through; }
+.pte-box .pte-tag.pte-disabled,
+.pte-box.pte-original .pte-tag.pte-disabled,
+.pte-box.pte-translated .pte-tag.pte-disabled {
+  background:var(--comfy-input-bg,#303030); color:#999; }
 /* Keep popups out of the way while a drag is in progress. */
 .pte-tag.pte-dragging .pte-pop,
 .pte-root.pte-drag-active .pte-pop { display:none !important; }
@@ -56,7 +62,11 @@ const STYLE = `
 .pte-pop.pte-pop-up { top:auto; bottom:100%; padding:0 0 5px; }
 .pte-pop-box { min-width:150px; padding:6px;
   border:1px solid var(--border-color,#666); border-radius:5px;
-  background:var(--comfy-input-bg,#202020); color:var(--input-text,#ddd);
+  background:var(--comfy-input-bg,#202020);
+  /* Force the theme background opaque: some light themes give it alpha, and
+     the popup turns see-through over the tags below it. */
+  background:rgb(from var(--comfy-input-bg,#202020) r g b / 1);
+  color:var(--input-text,#ddd);
   box-shadow:0 4px 12px #0008; }
 .pte-pop-title { font-weight:600; margin-bottom:4px; max-width:220px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -106,6 +116,30 @@ const STYLE = `
   border:1px solid var(--border-color,#555); border-radius:6px;
   background:repeating-conic-gradient(#2c2c2c 0% 25%, #232323 0% 50%) 50% / 16px 16px; }
 .pte-fp-preview.has-img img { display:block; }
+/* ---- tag suggestions (PromptTagEditorPlus) ---- */
+.pte-inner { position:relative; }
+.pte-ds-select { margin-left:auto; max-width:48%; background:var(--comfy-input-bg,#222);
+  color:var(--input-text,#ddd); border:1px solid var(--border-color,#444);
+  border-radius:5px; padding:2px 4px; }
+/* Dropdown overlay under the prompt caret (position set by JS via a mirror
+   measurement): scrollable so more matches than the ~10 visible rows can be
+   reached. */
+.pte-suggest { display:none; position:absolute; left:0; top:0; width:min(480px, calc(100% - 8px));
+  z-index:10002;
+  max-height:238px; overflow-y:auto; overscroll-behavior:contain;
+  background:var(--comfy-input-bg,#202020); border:1px solid var(--border-color,#666);
+  border-radius:5px; box-shadow:0 6px 16px #000a; }
+.pte-suggest.open { display:block; }
+.pte-sug-item { display:flex; align-items:flex-start; gap:8px; padding:3px 8px;
+  cursor:pointer; font-size:12px; line-height:1.35; }
+.pte-sug-item.active { background:#4a9eff33; }
+.pte-sug-item:hover { background:#ffffff14; }
+.pte-sug-en { flex:1.2; min-width:0; overflow-wrap:anywhere; color:var(--input-text,#ddd); }
+.pte-sug-mt { flex:1; min-width:0; overflow-wrap:anywhere; color:var(--input-text,#ddd); opacity:.55; }
+/* Theme text color (adapts to light/dark UI), slightly dimmed to read as a
+   "translation" next to the English tag. */
+.pte-sug-zh { flex:1; min-width:0; overflow-wrap:anywhere; color:var(--input-text,#ddd); opacity:.8; }
+.pte-sug-count { flex:none; opacity:.4; font-size:10px; padding-top:1px; min-width:34px; text-align:right; }
 `;
 
 const LANGS = [
@@ -413,7 +447,238 @@ function createTag(node, tag, index, translated) {
   return el;
 }
 
-function build(node) {
+// ---- tag suggestions (PromptTagEditorPlus) ---------------------------------
+
+// Live suggestions under the prompt textarea. The current (last, unfinished)
+// comma-separated token is searched in the selected dataset: English matches
+// tag names/aliases (spaces match underscores, any word order), Chinese
+// matches the manual and machine translations. Rows: English | machine
+// translation | manual translation | usage count. Picking a row replaces the
+// token with the tag's English name.
+function setupSuggest(node, state, nativeDataset) {
+  const promptEl = state.prompt;
+  const box = state.suggestBox;
+  const dsSelect = state.dataset;
+  dsSelect.style.display = "";
+
+  let open = false;
+  let items = [];
+  let active = -1;
+  let seq = 0;
+  let debounceTimer = 0;
+
+  const fmtCount = (n) => {
+    n = Number(n) || 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(0) + "k";
+    return String(n);
+  };
+
+  const closeBox = () => {
+    open = false;
+    box.classList.remove("open");
+    box.replaceChildren();
+    items = [];
+    active = -1;
+  };
+
+  // Caret pixel position, measured with a mirror div: identical layout to
+  // the textarea, text up to the caret, then a zero-width marker span whose
+  // offset is the caret's x/y within the wrapped text.
+  const measureCaret = () => {
+    const ta = promptEl;
+    const cs = getComputedStyle(ta);
+    const mirror = document.createElement("div");
+    mirror.style.position = "absolute";
+    mirror.style.left = "-9999px";
+    mirror.style.top = "0";
+    mirror.style.visibility = "hidden";
+    mirror.style.boxSizing = "border-box";
+    mirror.style.width = ta.clientWidth + "px";
+    mirror.style.whiteSpace = "pre-wrap";
+    mirror.style.overflowWrap = "break-word";
+    mirror.style.wordBreak = cs.wordBreak;
+    mirror.style.padding = cs.padding;
+    mirror.style.fontFamily = cs.fontFamily;
+    mirror.style.fontSize = cs.fontSize;
+    mirror.style.fontWeight = cs.fontWeight;
+    mirror.style.lineHeight = cs.lineHeight;
+    mirror.style.letterSpacing = cs.letterSpacing;
+    mirror.textContent = ta.value.slice(0, ta.selectionStart ?? ta.value.length);
+    const mark = document.createElement("span");
+    mark.textContent = "\u200b";
+    mirror.appendChild(mark);
+    document.body.appendChild(mirror);
+    const pos = {
+      x: mark.offsetLeft,
+      y: mark.offsetTop,
+      h: mark.offsetHeight || (parseFloat(cs.lineHeight) || 16),
+    };
+    mirror.remove();
+    return pos;
+  };
+
+  const position = () => {
+    const ta = promptEl;
+    const c = measureCaret();
+    const innerW = state.inner.clientWidth;
+    // Dropdown origin: below the caret line, compensating the textarea's own
+    // scroll. Clamped so the box stays inside the node body; flipped above
+    // the caret when there is no room below but room above.
+    let left = ta.offsetLeft + c.x + 1 - ta.scrollLeft;
+    let top = ta.offsetTop + c.y + c.h + 2 - ta.scrollTop;
+    const maxLeft = innerW - box.offsetWidth - 4;
+    if (maxLeft > 0) left = Math.max(2, Math.min(left, maxLeft));
+    const above = top + box.offsetHeight - state.inner.clientHeight;
+    if (above > 0 && c.y - ta.scrollTop - box.offsetHeight > 0) {
+      top = ta.offsetTop + c.y - ta.scrollTop - box.offsetHeight - 2;
+    }
+    box.style.left = left + "px";
+    box.style.top = top + "px";
+  };
+
+  const renderItems = () => {
+    box.replaceChildren();
+    items.forEach((it, i) => {
+      const row = document.createElement("div");
+      row.className = "pte-sug-item" + (i === active ? " active" : "");
+      const en = document.createElement("span");
+      en.className = "pte-sug-en";
+      en.textContent = it.name;
+      const mt = document.createElement("span");
+      mt.className = "pte-sug-mt";
+      mt.textContent = it.zh_mt || "";
+      const zh = document.createElement("span");
+      zh.className = "pte-sug-zh";
+      zh.textContent = it.zh || "";
+      const ct = document.createElement("span");
+      ct.className = "pte-sug-count";
+      ct.textContent = fmtCount(it.count);
+      row.title = `${it.name} · 使用 ${it.count}${it.cat ? " · " + it.cat : ""}`;
+      row.append(en, mt, zh, ct);
+      // Keep textarea focus (mousedown would blur it and close the box).
+      row.addEventListener("mousedown", e => e.preventDefault());
+      row.addEventListener("click", () => accept(i));
+      box.appendChild(row);
+    });
+  };
+
+  // Current unfinished token: text between the last top-level comma and the
+  // caret. Returns {start, end, text} or null.
+  const currentPartial = () => {
+    const text = promptEl.value;
+    const caret = promptEl.selectionStart ?? text.length;
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < caret; i++) {
+      const ch = text[i];
+      if ("([{".includes(ch)) depth++;
+      else if (")]}".includes(ch)) depth = Math.max(0, depth - 1);
+      else if (ch === "," && depth === 0) start = i + 1;
+    }
+    const raw = text.slice(start, caret);
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    return { start: start + raw.indexOf(trimmed), end: caret, text: trimmed };
+  };
+
+  const query = async () => {
+    const p = currentPartial();
+    // Skip weights "(tag:1.2)" and absurdly long input.
+    if (!p || p.text.includes(":") || p.text.length > 100) { closeBox(); return; }
+    const mySeq = ++seq;
+    try {
+      const res = await api.fetchApi(
+        `/prompt_tag_editor/suggest?dataset=${encodeURIComponent(dsSelect.value || "")}` +
+        `&q=${encodeURIComponent(p.text)}&limit=50`);
+      const data = await res.json().catch(() => null);
+      if (!data || !data.ok || mySeq !== seq) return;
+      const p2 = currentPartial();
+      if (!p2 || p2.text !== p.text) return; // token changed meanwhile
+      items = data.results || [];
+      if (!items.length) { closeBox(); return; }
+      active = 0;
+      renderItems();
+      // Must be visible before position(): measuring needs offsetWidth/Height.
+      box.classList.add("open");
+      position();
+      open = true;
+    } catch (err) { /* suggestions are best-effort */ }
+  };
+  const schedule = () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(query, 160);
+  };
+
+  const accept = (i) => {
+    const it = items[i];
+    if (!it) return;
+    const p = currentPartial();
+    closeBox();
+    if (!p) return;
+    const text = promptEl.value;
+    const inserted = it.name + ", ";
+    const next = text.slice(0, p.start) + inserted + text.slice(p.end);
+    state.suppressInput = true;
+    promptEl.value = next;
+    state.suppressInput = false;
+    state.rebuildFromText(next);
+    state.render();
+    const caret = p.start + inserted.length;
+    try { promptEl.setSelectionRange(caret, caret); } catch (err) { /* ignore */ }
+    promptEl.focus();
+    state.scheduleAuto(900);
+  };
+
+  const move = (d) => {
+    if (!open || !items.length) return;
+    active = (active + d + items.length) % items.length;
+    renderItems();
+    box.children[active]?.scrollIntoView({ block: "nearest" });
+  };
+
+  promptEl.addEventListener("keydown", (e) => {
+    if (!open) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+    else if (e.key === "Enter" || e.key === "Tab") {
+      if (active >= 0) { e.preventDefault(); accept(active); }
+    } else if (e.key === "Escape") { e.preventDefault(); closeBox(); }
+  });
+
+  promptEl.addEventListener("input", schedule);
+  promptEl.addEventListener("scroll", () => { if (open) position(); });
+  promptEl.addEventListener("blur", () => {
+    setTimeout(() => { if (!box.matches(":hover")) closeBox(); }, 120);
+  });
+
+  // Dataset switcher (persisted via the hidden native widget).
+  dsSelect.innerHTML = `<option value="">加载中…</option>`;
+  state.applyDataset = () => {
+    const saved = String(nativeDataset?.value || "");
+    if ([...dsSelect.options].some(o => o.value === saved) && saved) dsSelect.value = saved;
+  };
+  api.fetchApi("/prompt_tag_editor/datasets")
+    .then(r => r.json())
+    .then(data => {
+      const list = (data && data.datasets) || [];
+      if (!list.length) {
+        dsSelect.innerHTML = `<option value="">（data 目录无数据集）</option>`;
+        return;
+      }
+      dsSelect.innerHTML = list
+        .map(n => `<option value="${n}">${n.replace(/\.csv$/i, "")}</option>`).join("");
+      state.applyDataset();
+      if (!dsSelect.value && nativeDataset) nativeDataset.value = dsSelect.value = list[0];
+    })
+    .catch(() => { dsSelect.innerHTML = `<option value="">（数据集加载失败）</option>`; });
+  dsSelect.addEventListener("change", () => {
+    if (nativeDataset) nativeDataset.value = dsSelect.value;
+    if (open) query();
+  });
+}
+
+function build(node, opts = {}) {
   if (node.__pte) return;
   installStyle();
 
@@ -421,6 +686,7 @@ function build(node) {
   const nativeLang = hideWidget(node, "target_language");
   const nativeTranslated = hideWidget(node, "translated_prompt");
   const nativeState = hideWidget(node, "tags_state");
+  const nativeDataset = hideWidget(node, "dataset");
 
   const root = document.createElement("div");
   root.className = "pte-root";
@@ -429,8 +695,12 @@ function build(node) {
   // fixed block below keeps its content height regardless of node size.
   root.innerHTML = `
     <div class="pte-inner">
-      <div class="pte-label">原始提示词</div>
+      <div class="pte-row">
+        <div class="pte-label">原始提示词</div>
+        <select class="pte-ds-select" style="display:none" title="联想数据集（输入时匹配的词库）"></select>
+      </div>
       <textarea class="pte-textarea" rows="3" placeholder="1girl, long hair, blue eyes, white dress..."></textarea>
+      <div class="pte-suggest"></div>
       <div class="pte-fixed">
         <div class="pte-label">Tags</div>
         <div class="pte-box pte-original"></div>
@@ -487,6 +757,8 @@ function build(node) {
     inner,
     fixed: fixedEl,
     prompt: root.querySelector(".pte-textarea"),
+    suggestBox: root.querySelector(".pte-suggest"),
+    dataset: root.querySelector(".pte-ds-select"),
     original: root.querySelector(".pte-original"),
     translated: root.querySelector(".pte-translated"),
     lang: root.querySelector(".pte-lang"),
@@ -574,12 +846,31 @@ function build(node) {
     disabled: !!t.disabled,
   })));
 
+  // Programmatic textarea writes must not yank the caret to the end. Assigning
+  // .value resets the caret, so remember it: caret at the end stays at the end
+  // (e.g. a trailing ", " appended while typing), a caret mid-text stays put
+  // when everything before it is unchanged, and only genuinely different
+  // rewrites (workflow reloads) drop to the end.
+  const setPromptText = (text) => {
+    const el = state.prompt;
+    const old = el.value;
+    if (old === text) return;
+    const s = el.selectionStart;
+    const e2 = el.selectionEnd;
+    const focused = document.activeElement === el;
+    el.value = text;
+    if (!focused || s == null || e2 == null) return;
+    const mapPos = (p) => (p === old.length ? text.length
+      : text.startsWith(old.slice(0, p)) ? p : text.length);
+    try { el.setSelectionRange(mapPos(s), mapPos(e2)); } catch (err) { /* ignore */ }
+  };
+
   state.syncText = () => {
     const base = serialize(state.tags);
     const text = base + trailingSeparator(state.prompt.value);
     if (state.prompt.value !== text) {
       state.suppressInput = true;
-      state.prompt.value = text;
+      setPromptText(text);
       state.suppressInput = false;
     }
     if (nativePrompt) nativePrompt.value = base;
@@ -774,6 +1065,8 @@ function build(node) {
   };
   state.scheduleAuto = scheduleAuto;
 
+  if (opts.suggest) setupSuggest(node, state, nativeDataset);
+
   state.translateButton.addEventListener("click", () => doTranslate());
   state.lang.addEventListener("change", () => {
     if (nativeLang) nativeLang.value = state.lang.value;
@@ -803,7 +1096,7 @@ function build(node) {
       // would eat spaces/trailing commas mid-edit.
       if (serialize(parsePrompt(text)) === serialize(state.tags)) return;
       state.suppressInput = true;
-      state.prompt.value = text;
+      setPromptText(text);
       state.suppressInput = false;
       state.rebuildFromText(text);
       state.render();
@@ -847,6 +1140,7 @@ function build(node) {
   node.onConfigure = function () {
     origConfigure?.apply(this, arguments);
     resyncFromNative();
+    state.applyDataset?.();
   };
 
   if (node.size && node.size[0] < 420) {
@@ -1047,6 +1341,12 @@ app.registerExtension({
         build(node);
       } catch (err) {
         console.error("[PromptTagEditor] build failed:", err);
+      }
+    } else if (node.comfyClass === "PromptTagEditorPlus") {
+      try {
+        build(node, { suggest: true });
+      } catch (err) {
+        console.error("[PromptTagEditorPlus] build failed:", err);
       }
     } else if (node.comfyClass === "LoadImageFromPath") {
       try {

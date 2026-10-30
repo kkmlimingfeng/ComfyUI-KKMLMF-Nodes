@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,22 @@ def load_saved_tags(raw):
             "disabled": bool(item.get("disabled", False)),
         })
     return tags
+
+
+def _editor_execute(prompt, translated_prompt, target_language, tags_state=""):
+    tags = parse_prompt(prompt)
+    # When tags_state is consistent with the prompt text, prefer it: it
+    # carries weights, translations and disabled flags.
+    saved = load_saved_tags(tags_state)
+    if saved is not None:
+        enabled = [t for t in saved if not t["disabled"]]
+        if serialize_prompt(enabled) == serialize_prompt(tags):
+            tags = saved
+    return io.NodeOutput(
+        serialize_prompt(tags),
+        translated_prompt or "",
+        json.dumps(tags, ensure_ascii=False),
+    )
 
 
 class PromptTagEditor(io.ComfyNode):
@@ -89,25 +106,68 @@ class PromptTagEditor(io.ComfyNode):
 
     @classmethod
     def execute(cls, prompt, translated_prompt, target_language, tags_state=""):
-        tags = parse_prompt(prompt)
-        # When tags_state is consistent with the prompt text, prefer it: it
-        # carries weights, translations and disabled flags.
-        saved = load_saved_tags(tags_state)
-        if saved is not None:
-            enabled = [t for t in saved if not t["disabled"]]
-            if serialize_prompt(enabled) == serialize_prompt(tags):
-                tags = saved
-        return io.NodeOutput(
-            serialize_prompt(tags),
-            translated_prompt or "",
-            json.dumps(tags, ensure_ascii=False),
+        return _editor_execute(prompt, translated_prompt, target_language, tags_state)
+
+
+class PromptTagEditorPlus(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="PromptTagEditorPlus",
+            display_name="Prompt Tag Editor Plus",
+            category="Prompt Tools",
+            description="Prompt Tag Editor with tag suggestions: type English or Chinese in the "
+                        "prompt box to get the most-used matching tags, click one to insert it.",
+            inputs=[
+                io.String.Input(
+                    "prompt",
+                    default="",
+                    multiline=True,
+                    tooltip="Original prompt. Tags are separated by commas.",
+                ),
+                io.String.Input(
+                    "translated_prompt",
+                    default="",
+                    multiline=True,
+                    tooltip="Translated tags. Kept in sync by the frontend editor UI.",
+                ),
+                io.Combo.Input(
+                    "target_language",
+                    options=[
+                        "Chinese", "Japanese", "Korean", "English",
+                        "French", "German", "Spanish", "Russian",
+                    ],
+                    default="Chinese",
+                    tooltip="Language used by the translation result Tags.",
+                ),
+                io.String.Input(
+                    "dataset",
+                    default="",
+                    tooltip="Suggestion dataset (CSV file in the data/ folder). "
+                            "Managed by the frontend select; empty = first dataset.",
+                ),
+                io.String.Input(
+                    "tags_state",
+                    default="",
+                    tooltip="Internal editor state (tags JSON). Managed by the frontend UI; do not edit.",
+                ),
+            ],
+            outputs=[
+                io.String.Output("prompt", display_name="Prompt"),
+                io.String.Output("translated_prompt", display_name="Translated Prompt"),
+                io.String.Output("tags_json", display_name="Tags JSON"),
+            ],
         )
+
+    @classmethod
+    def execute(cls, prompt, translated_prompt, target_language, dataset="", tags_state=""):
+        return _editor_execute(prompt, translated_prompt, target_language, tags_state)
 
 
 class PromptTagEditorExtension(ComfyExtension):
     async def get_node_list(self):
         from .reroute import MultiReroute
-        return [PromptTagEditor, LoadImageFromPath, MultiReroute]
+        return [PromptTagEditor, PromptTagEditorPlus, LoadImageFromPath, MultiReroute]
 
 
 # ---- load image from path -------------------------------------------------
@@ -218,6 +278,152 @@ class LoadImageFromPath(io.ComfyNode):
         output_image = torch.cat(output_images, dim=0).to(device=device, dtype=dtype)
         output_mask = torch.cat(output_masks, dim=0).to(device=device, dtype=dtype)
         return io.NodeOutput(output_image, output_mask)
+
+
+# ---- tag suggestion datasets (PromptTagEditorPlus) -------------------------
+
+_DATA_DIR = Path(__file__).parent / "data"
+_dataset_cache = {}  # filename -> {"mtime": float, "rows": list}
+
+
+def _list_datasets():
+    """CSV files available in the data/ folder (sorted by name)."""
+    try:
+        return sorted(p.name for p in _DATA_DIR.glob("*.csv") if p.is_file())
+    except OSError:
+        return []
+
+
+def _load_dataset(name):
+    """Load a dataset CSV into memory (cached by filename + mtime).
+
+    Rows: name, count, zh (manual translation), zh_mt (machine translation),
+    aliases (| separated). Sorted by usage count descending.
+    """
+    safe = os.path.basename(str(name or "").strip())
+    if not safe:
+        raise ValueError("数据集名为空")
+    path = _DATA_DIR / safe
+    if not path.is_file():
+        raise ValueError(f"数据集不存在: {safe}")
+
+    try:
+        mtime = path.stat().st_mtime
+    except OSError as exc:
+        raise ValueError(f"无法读取数据集: {exc}")
+    cached = _dataset_cache.get(safe)
+    if cached and cached["mtime"] == mtime:
+        return cached["rows"]
+
+    rows = []
+    # utf-8-sig: the CSVs carry a BOM; plain utf-8 would hide the first
+    # column ("name") behind it.
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        for r in csv.DictReader(f):
+            try:
+                count = int(r.get("count") or 0)
+            except (TypeError, ValueError):
+                count = 0
+            rows.append({
+                "name": (r.get("name") or "").strip(),
+                "count": count,
+                "zh": (r.get("zh") or "").strip(),
+                "zh_mt": (r.get("zh_mt") or "").strip(),
+                "aliases": [a.strip() for a in (r.get("aliases") or "").split("|") if a.strip()],
+                "cat": (r.get("cat") or "").strip(),
+            })
+    rows.sort(key=lambda r: -r["count"])
+    _dataset_cache[safe] = {"mtime": mtime, "rows": rows}
+    return rows
+
+
+def _has_cjk(s):
+    return any("\u4e00" <= ch <= "\u9fff" for ch in s)
+
+
+def _search_tags(rows, query, limit):
+    """Search a loaded dataset. English queries match name/aliases (spaces in
+    the query match underscores in tags, and multi-word queries match in any
+    order); Chinese queries match the manual (zh) and machine (zh_mt)
+    translations. Results ranked by match quality then usage count."""
+    ql = query.strip().lower()
+    if not ql:
+        return []
+    tokens = [t for t in ql.replace("_", " ").split() if t]
+    nq = "_".join(tokens)  # "long hair" -> "long_hair"
+    cjk = _has_cjk(ql)
+
+    hits = []
+    for row in rows:
+        ranks = []
+        nl = row["name"].lower()
+        als = [a.lower() for a in row["aliases"]]
+        if nq:
+            if nl == nq:
+                ranks.append(0)
+            elif nl.startswith(nq):
+                ranks.append(1)
+            elif nq in nl:
+                ranks.append(4)
+            if any(a == nq for a in als):
+                ranks.append(2)
+            elif any(a.startswith(nq) for a in als):
+                ranks.append(3)
+            elif any(nq in a for a in als):
+                ranks.append(5)
+            if len(tokens) > 1:
+                hay = (nl + " " + " ".join(als)).replace("_", " ")
+                if all(t in hay for t in tokens):
+                    ranks.append(6)
+        if cjk:
+            zh, zh_mt = row["zh"], row["zh_mt"]
+            if zh:
+                if zh.startswith(query):
+                    ranks.append(1.5)
+                elif query in zh:
+                    ranks.append(3.5)
+            if zh_mt and query in zh_mt:
+                ranks.append(5.5)
+        if ranks:
+            hits.append((min(ranks), -row["count"], row))
+
+    hits.sort(key=lambda h: (h[0], h[1]))
+    return [h[2] for h in hits[:limit]]
+
+
+@PromptServer.instance.routes.get("/prompt_tag_editor/datasets")
+async def prompt_tag_editor_datasets(request):
+    datasets = _list_datasets()
+    return web.json_response({"ok": True, "datasets": datasets})
+
+
+@PromptServer.instance.routes.get("/prompt_tag_editor/suggest")
+async def prompt_tag_editor_suggest(request):
+    q = request.query.get("q", "")
+    try:
+        limit = max(1, min(int(request.query.get("limit", "50")), 100))
+    except ValueError:
+        limit = 50
+
+    dataset = request.query.get("dataset", "").strip()
+    if not dataset:
+        datasets = _list_datasets()
+        if not datasets:
+            return web.json_response({"ok": False, "error": "data 目录下没有数据集 CSV"}, status=400)
+        dataset = datasets[0]
+
+    try:
+        rows = _load_dataset(dataset)
+    except ValueError as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=400)
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": f"数据集加载失败: {exc}"}, status=500)
+
+    results = _search_tags(rows, q, limit) if q.strip() else []
+    return web.json_response({"ok": True, "dataset": dataset, "results": [
+        {"name": r["name"], "zh": r["zh"], "zh_mt": r["zh_mt"],
+         "count": r["count"], "cat": r["cat"]} for r in results
+    ]})
 
 
 @PromptServer.instance.routes.post("/prompt_tag_editor/translate")
