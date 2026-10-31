@@ -1,4 +1,4 @@
-﻿"""Multi Reroute: a stack of N reroute rows in one node.
+"""Multi Reroute: a stack of N reroute rows in one node.
 
 Each row i is an independent pass-through channel: input "route i" → output
 "route i". The backend declares MAX_ROUTES optional wildcard inputs and
