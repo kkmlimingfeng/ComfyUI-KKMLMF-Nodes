@@ -1,4 +1,4 @@
-﻿# ComfyUI KKMLMF Nodes
+﻿﻿﻿﻿# ComfyUI KKMLMF Nodes
 
 [English](./README.md) | [中文](./README-zh.md)
 
@@ -18,9 +18,13 @@ Built on the modern `comfy_api.latest` / `ComfyExtension` (V3) node API — requ
   list (grayed out) but are excluded from the prompt and outputs
 - Translated tag chips with per-language cache; untranslated chips shown dashed
 - **Auto-translate** toggle: missing translations are filled automatically after edits
-- **Chinese (CSV)** language option (default): translates tags by looking them
-  up in the dataset CSVs — instant, no model, and switching to it unloads the
-  translation model; tags with no dataset entry show red "untranslatable"
+- **Chinese (CSV)** language option (Plus node): translates tags by looking them
+  up in the dataset selected in the node — instant, no model, and switching to
+  it unloads the translation model; tags with no dataset entry show red
+  "untranslatable". The original node always uses the translation model
+  (default: Chinese)
+- **Auto format** toggle (Plus node): when off, editing tags no longer rewrites
+  the prompt box with normalized comma/spacing — your layout is kept as typed
 - **Underscore → space** toggle: when on, every `_` in the prompt (typed,
   pasted or inserted from suggestions) becomes a space
 - 8 model-backed target languages: Chinese / Japanese / Korean / English /

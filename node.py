@@ -85,14 +85,13 @@ class PromptTagEditor(io.ComfyNode):
                 io.Combo.Input(
                     "target_language",
                     options=[
-                        CSV_LANGUAGE, "Chinese", "Japanese", "Korean", "English",
+                        "Chinese", "Japanese", "Korean", "English",
                         "French", "German", "Spanish", "Russian",
                     ],
-                    default=CSV_LANGUAGE,
-                    tooltip="Translation backend for the Tags result. "
-                            f"{CSV_LANGUAGE} looks tags up in the data/ CSVs "
-                            "directly (no model); the other options use the "
-                            "Hy-MT2 translation model.",
+                    default="Chinese",
+                    tooltip="Translation backend for the Tags result "
+                            "(Hy-MT2 translation model). CSV lookup is only "
+                            "available on the Plus node.",
                 ),
                 io.String.Input(
                     "tags_state",
@@ -142,9 +141,9 @@ class PromptTagEditorPlus(io.ComfyNode):
                     ],
                     default=CSV_LANGUAGE,
                     tooltip="Translation backend for the Tags result. "
-                            f"{CSV_LANGUAGE} looks tags up in the data/ CSVs "
-                            "directly (no model); the other options use the "
-                            "Hy-MT2 translation model.",
+                            f"{CSV_LANGUAGE} looks tags up in the dataset "
+                            "selected below (no model); the other options use "
+                            "the Hy-MT2 translation model.",
                 ),
                 io.String.Input(
                     "dataset",
@@ -432,12 +431,16 @@ def _csv_index_for(name):
     return index
 
 
-def csv_translate(texts):
+def csv_translate(texts, dataset=""):
     """Translate tags via the dataset CSVs only (no model). English tags are
-    matched against name/aliases (first dataset wins, sorted by filename);
-    tags that already contain Chinese are passed through unchanged; unknown
+    matched against name/aliases; when `dataset` names a specific CSV only
+    that dataset is used, otherwise all datasets are tried in filename order.
+    Tags that already contain Chinese are passed through unchanged; unknown
     tags return an empty string (shown as untranslated)."""
-    datasets = _list_datasets()
+    if str(dataset or "").strip():
+        datasets = [os.path.basename(str(dataset).strip())]
+    else:
+        datasets = _list_datasets()
     if not datasets:
         raise ValueError("data 目录下没有数据集 CSV，无法进行词库直译")
     out = []
@@ -496,12 +499,13 @@ async def prompt_tag_editor_translate(request):
         data = await request.json()
         tags = data.get("tags", [])
         language = data.get("target_language", "Chinese")
+        dataset = data.get("dataset", "")
 
         texts = [str(t.get("text", "")).strip() for t in tags]
 
         if language == CSV_LANGUAGE:
             # Dataset-driven Chinese: pure CSV lookup, never loads the model.
-            translations = csv_translate(texts)
+            translations = csv_translate(texts, dataset)
         else:
             translations = await translate_tags(texts, language)
 

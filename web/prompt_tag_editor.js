@@ -731,6 +731,8 @@ function build(node, opts = {}) {
         <div class="pte-label">原始提示词</div>
         <label class="pte-auto" title="开启后，提示词中的所有下划线会替换成空格">
           <input type="checkbox" class="pte-under-check">下划线转空格</label>
+        <label class="pte-auto pte-fmt-wrap" title="开启后，编辑标签会自动重排逗号和空格；关闭后保持你输入的排版">
+          <input type="checkbox" class="pte-fmt-check" checked>自动调整格式</label>
         <select class="pte-ds-select" style="display:none" title="联想数据集（输入时匹配的词库）"></select>
       </div>
       <textarea class="pte-textarea" rows="3" placeholder="1girl, long hair, blue eyes, white dress..."></textarea>
@@ -797,6 +799,8 @@ function build(node, opts = {}) {
     translated: root.querySelector(".pte-translated"),
     lang: root.querySelector(".pte-lang"),
     underCheck: root.querySelector(".pte-under-check"),
+    fmtCheck: root.querySelector(".pte-fmt-check"),
+    fmtWrap: root.querySelector(".pte-fmt-wrap"),
     autoCheck: root.querySelector(".pte-auto-check"),
     translateButton: root.querySelector(".pte-translate"),
     status: root.querySelector(".pte-status"),
@@ -809,6 +813,15 @@ function build(node, opts = {}) {
   };
 
   const state = node.__pte;
+
+  // The original editor has no dataset picker: the CSV lookup option only
+  // exists on Plus, and the default is model translation ("Chinese").
+  // "自动调整格式" is a Plus-only toggle too.
+  if (!opts.suggest) {
+    state.lang.querySelector(`option[value="${CSS.escape(CSV_LANG)}"]`)?.remove();
+    state.lang.value = "Chinese";
+    if (state.fmtWrap) state.fmtWrap.style.display = "none";
+  }
 
   // Grow-only content fit. Two guards against the load/clone inflation:
   // (1) width must be stable across a frame before any fit — right after
@@ -900,13 +913,19 @@ function build(node, opts = {}) {
     try { el.setSelectionRange(mapPos(s), mapPos(e2)); } catch (err) { /* ignore */ }
   };
 
+  // "自动调整格式"（仅 Plus）：关闭后编辑标签不再把序列化文本写回提示词
+  // 输入框，用户输入的逗号/空格排版保持原样（隐藏 widget 仍存规范文本）。
+  const autoFormat = () => !state.fmtCheck || state.fmtCheck.checked;
+
   state.syncText = () => {
     const base = serialize(state.tags);
-    const text = base + trailingSeparator(state.prompt.value);
-    if (state.prompt.value !== text) {
-      state.suppressInput = true;
-      setPromptText(text);
-      state.suppressInput = false;
+    if (autoFormat()) {
+      const text = base + trailingSeparator(state.prompt.value);
+      if (state.prompt.value !== text) {
+        state.suppressInput = true;
+        setPromptText(text);
+        state.suppressInput = false;
+      }
     }
     if (nativePrompt) nativePrompt.value = base;
     if (nativeTranslated) nativeTranslated.value = serializeTranslations(state.tags);
@@ -1005,7 +1024,7 @@ function build(node, opts = {}) {
       state.translated.appendChild(createTag(node, tag, i, true));
     });
 
-    if (opts.keepRaw) {
+    if (opts.keepRaw || !autoFormat()) {
       // Keep the textarea exactly as typed; only push values to hidden
       // widgets (the prompt widget gets the canonical serialized text so
       // save/load stays consistent even with a trailing comma mid-typing).
@@ -1050,6 +1069,7 @@ function build(node, opts = {}) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           target_language: state.lang.value,
+          dataset: state.dataset?.value || "",
           tags: state.tags.map(t => ({ text: t.text })),
         }),
       });
@@ -1119,6 +1139,18 @@ function build(node, opts = {}) {
     state.render();
     scheduleAuto(900);
   });
+
+  // ---- auto format toggle (Plus only) -------------------------------------
+  // Persisted via node.properties so the choice survives workflow save/load.
+  const fmtCheck = state.fmtCheck;
+  if (fmtCheck) {
+    fmtCheck.checked = node.properties?.pte_auto_format !== false;
+    fmtCheck.addEventListener("change", () => {
+      node.properties = node.properties || {};
+      node.properties.pte_auto_format = fmtCheck.checked;
+      if (fmtCheck.checked) state.render(); // turning it back on: re-format now
+    });
+  }
 
   if (opts.suggest) setupSuggest(node, state, nativeDataset);
 
@@ -1209,6 +1241,9 @@ function build(node, opts = {}) {
   const origConfigure = node.onConfigure;
   node.onConfigure = function () {
     origConfigure?.apply(this, arguments);
+    // nodeCreated ran before the workflow's properties were applied, so
+    // restore the toggle here.
+    if (fmtCheck) fmtCheck.checked = this.properties?.pte_auto_format !== false;
     resyncFromNative();
     state.applyDataset?.();
   };
