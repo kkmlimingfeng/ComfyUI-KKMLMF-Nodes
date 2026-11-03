@@ -1248,8 +1248,10 @@ function build(node, opts = {}) {
     state.applyDataset?.();
   };
 
-  if (node.size && node.size[0] < 420) {
-    node.setSize?.([420, node.size[1]]);
+  // Wide enough for the toolbar row (label + two toggles + dataset select)
+  // on one line.
+  if (node.size && node.size[0] < 520) {
+    node.setSize?.([520, node.size[1]]);
   }
   requestAnimationFrame(() => fitNodeSize());
 }
