@@ -1,4 +1,4 @@
-﻿﻿﻿﻿# ComfyUI KKMLMF Nodes（提示词标签编辑器等）
+﻿﻿﻿﻿﻿﻿# ComfyUI KKMLMF Nodes（提示词标签编辑器等）
 
 [English](./README.md) | [中文](./README-zh.md)
 
@@ -6,7 +6,7 @@ ComfyUI 交互式提示词/标签编辑节点，可选本地翻译功能，由�
 
 基于新版 `comfy_api.latest` / `ComfyExtension`（V3）节点 API 构建，需要较新版本的 ComfyUI。
 
-![Prompt Tag Editor](images/prompt_tag_editor.png)
+![KKMLMF-Nodes](images/kkmlmf-nodes.png)
 
 ## 功能特性
 

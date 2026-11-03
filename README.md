@@ -1,4 +1,4 @@
-﻿﻿﻿﻿# ComfyUI KKMLMF Nodes
+﻿﻿﻿﻿﻿﻿# ComfyUI KKMLMF Nodes
 
 [English](./README.md) | [中文](./README-zh.md)
 
@@ -6,7 +6,7 @@ Interactive prompt/tag editor node for ComfyUI, with optional local translation 
 
 Built on the modern `comfy_api.latest` / `ComfyExtension` (V3) node API — requires a recent ComfyUI.
 
-![Prompt Tag Editor](images/prompt_tag_editor.png)
+![KKMLMF-Nodes](images/kkmlmf-nodes.png)
 
 ## Features
 
