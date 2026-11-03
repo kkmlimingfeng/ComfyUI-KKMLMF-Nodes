@@ -27,6 +27,8 @@ Built on the modern `comfy_api.latest` / `ComfyExtension` (V3) node API — requ
   the prompt box with normalized comma/spacing — your layout is kept as typed
 - **Underscore → space** toggle: when on, every `_` in the prompt (typed,
   pasted or inserted from suggestions) becomes a space
+- **Extra separators** toggles: optionally split tags on the English period `.`
+  and/or the Chinese `，` and `。` as well
 - 8 model-backed target languages: Chinese / Japanese / Korean / English /
   French / German / Spanish / Russian (loaded on demand, as before)
 - Lazy-loaded `Hy-MT2-1.8B-Q4_K_M` GGUF, full GPU offload (`n_gpu_layers=-1`), batched request with per-item fallback and translation cache

@@ -163,7 +163,14 @@ function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-function parsePrompt(text) {
+// Extra separators are opt-in via `sep`: { dot: "." splits, cn: "，" and "。" split }.
+function isSepChar(ch, sep) {
+  return ch === "," ||
+    (sep?.dot && ch === ".") ||
+    (sep?.cn && (ch === "，" || ch === "。"));
+}
+
+function parsePrompt(text, sep = null) {
   const result = [];
   let buf = "";
   let depth = 0;
@@ -172,7 +179,7 @@ function parsePrompt(text) {
     if ("([{".includes(ch)) depth++;
     if (")]}".includes(ch)) depth = Math.max(0, depth - 1);
 
-    if (ch === "," && depth === 0) {
+    if (depth === 0 && isSepChar(ch, sep)) {
       const s = buf.trim();
       if (s) result.push(parseTag(s));
       buf = "";
@@ -220,10 +227,11 @@ function serializeTranslations(tags) {
     .filter(Boolean).join(", ");
 }
 
-// If the raw text ends with a comma (at bracket depth 0), keep a ", " at the
-// end so the user can directly continue typing the next tag.
-function trailingSeparator(raw) {
-  if (!/,\s*$/.test(raw || "")) return "";
+// If the raw text ends with an ENABLED separator (at bracket depth 0), keep
+// a ", " at the end so the user can directly continue typing the next tag.
+function trailingSeparator(raw, sep = null) {
+  const m = /([,.，。])\s*$/.exec(raw || "");
+  if (!m || !isSepChar(m[1], sep)) return "";
   let depth = 0;
   for (const ch of raw) {
     if ("([{".includes(ch)) depth++;
@@ -593,9 +601,10 @@ function setupSuggest(node, state, nativeDataset) {
     });
   };
 
-  // Current unfinished token: text between the last top-level comma and the
-  // caret. Returns {start, end, text} or null.
+  // Current unfinished token: text between the last top-level separator and
+  // the caret. Returns {start, end, text} or null.
   const currentPartial = () => {
+    const sep = state.sepOpts ? state.sepOpts() : {};
     const text = promptEl.value;
     const caret = promptEl.selectionStart ?? text.length;
     let depth = 0;
@@ -604,7 +613,7 @@ function setupSuggest(node, state, nativeDataset) {
       const ch = text[i];
       if ("([{".includes(ch)) depth++;
       else if (")]}".includes(ch)) depth = Math.max(0, depth - 1);
-      else if (ch === "," && depth === 0) start = i + 1;
+      else if (depth === 0 && isSepChar(ch, sep)) start = i + 1;
     }
     const raw = text.slice(start, caret);
     const trimmed = raw.trim();
@@ -738,7 +747,13 @@ function build(node, opts = {}) {
       <textarea class="pte-textarea" rows="3" placeholder="1girl, long hair, blue eyes, white dress..."></textarea>
       <div class="pte-suggest"></div>
       <div class="pte-fixed">
-        <div class="pte-label">Tags</div>
+        <div class="pte-row">
+          <div class="pte-label">Tags</div>
+          <label class="pte-auto" title="勾选后，英文句号 . 也可以分隔标签">
+            <input type="checkbox" class="pte-sep-dot-check">句点分隔</label>
+          <label class="pte-auto" title="勾选后，中文逗号 ， 和句号 。 也可以分隔标签">
+            <input type="checkbox" class="pte-sep-cn-check">中文逗号句号分隔</label>
+        </div>
         <div class="pte-box pte-original"></div>
 
         <div class="pte-row">
@@ -801,6 +816,8 @@ function build(node, opts = {}) {
     underCheck: root.querySelector(".pte-under-check"),
     fmtCheck: root.querySelector(".pte-fmt-check"),
     fmtWrap: root.querySelector(".pte-fmt-wrap"),
+    sepDot: root.querySelector(".pte-sep-dot-check"),
+    sepCn: root.querySelector(".pte-sep-cn-check"),
     autoCheck: root.querySelector(".pte-auto-check"),
     translateButton: root.querySelector(".pte-translate"),
     status: root.querySelector(".pte-status"),
@@ -917,10 +934,14 @@ function build(node, opts = {}) {
   // 输入框，用户输入的逗号/空格排版保持原样（隐藏 widget 仍存规范文本）。
   const autoFormat = () => !state.fmtCheck || state.fmtCheck.checked;
 
+  // Extra separators (both nodes, persisted via node.properties).
+  const sepOpts = () => ({ dot: !!state.sepDot?.checked, cn: !!state.sepCn?.checked });
+  state.sepOpts = sepOpts;
+
   state.syncText = () => {
     const base = serialize(state.tags);
     if (autoFormat()) {
-      const text = base + trailingSeparator(state.prompt.value);
+      const text = base + trailingSeparator(state.prompt.value, sepOpts());
       if (state.prompt.value !== text) {
         state.suppressInput = true;
         setPromptText(text);
@@ -939,7 +960,7 @@ function build(node, opts = {}) {
   // Re-typing the same text re-enables a disabled tag (its anchor is then
   // dropped in favour of the parsed copy at the typed position).
   state.rebuildFromText = (text) => {
-    const parsed = parsePrompt(text);
+    const parsed = parsePrompt(text, sepOpts());
     const old = state.tags;
     const parsedTexts = new Set(parsed.map(p => p.text));
     const anchors = new Set(old.filter(t =>
@@ -1152,6 +1173,22 @@ function build(node, opts = {}) {
     });
   }
 
+  // ---- extra separators: "." and "，。"(persisted via node.properties) -----
+  const wireSep = (check, key) => {
+    if (!check) return;
+    check.checked = node.properties?.[key] === true;
+    check.addEventListener("change", () => {
+      node.properties = node.properties || {};
+      node.properties[key] = check.checked;
+      // Re-split the prompt with the new separator set.
+      state.rebuildFromText(state.prompt.value);
+      state.render();
+      scheduleAuto(900);
+    });
+  };
+  wireSep(state.sepDot, "pte_sep_dot");
+  wireSep(state.sepCn, "pte_sep_cn");
+
   if (opts.suggest) setupSuggest(node, state, nativeDataset);
 
   state.translateButton.addEventListener("click", () => doTranslate());
@@ -1193,7 +1230,7 @@ function build(node, opts = {}) {
       // callback. Ignore echoes describing the tags we already have (e.g.
       // the canonical text pushed while typing), otherwise the rewrite
       // would eat spaces/trailing commas mid-edit.
-      if (serialize(parsePrompt(text)) === serialize(state.tags)) return;
+      if (serialize(parsePrompt(text, sepOpts())) === serialize(state.tags)) return;
       state.suppressInput = true;
       setPromptText(text);
       state.suppressInput = false;
@@ -1210,7 +1247,7 @@ function build(node, opts = {}) {
     try { saved = JSON.parse(nativeState?.value || "null"); } catch (err) { saved = null; }
 
     if (Array.isArray(saved) &&
-        serialize(saved.filter(t => t && !t.disabled)) === serialize(parsePrompt(text))) {
+        serialize(saved.filter(t => t && !t.disabled)) === serialize(parsePrompt(text, sepOpts()))) {
       // tags_state matches the prompt text: restore the full editor state
       // (order, weights, translations and disabled flags).
       state.tags = saved
@@ -1224,7 +1261,7 @@ function build(node, opts = {}) {
         }));
     } else {
       // External/legacy prompt text: parse it fresh.
-      state.tags = parsePrompt(text);
+      state.tags = parsePrompt(text, sepOpts());
     }
     state.suppressInput = true;
     state.prompt.value = text;
@@ -1242,8 +1279,10 @@ function build(node, opts = {}) {
   node.onConfigure = function () {
     origConfigure?.apply(this, arguments);
     // nodeCreated ran before the workflow's properties were applied, so
-    // restore the toggle here.
+    // restore the toggles here.
     if (fmtCheck) fmtCheck.checked = this.properties?.pte_auto_format !== false;
+    if (state.sepDot) state.sepDot.checked = this.properties?.pte_sep_dot === true;
+    if (state.sepCn) state.sepCn.checked = this.properties?.pte_sep_cn === true;
     resyncFromNative();
     state.applyDataset?.();
   };
