@@ -195,6 +195,7 @@ function parsePrompt(text, sep = null) {
 
 function parseTag(text) {
   let body = text.trim();
+  const raw = body; // as-typed source slice (underscores / original weight notation)
   let weight = 1.0;
 
   let m = body.match(/^\((.*):([0-9]*\.?[0-9]+)\)$/);
@@ -209,16 +210,29 @@ function parseTag(text) {
     weight = 1.1;
   }
 
-  return { id: uid(), text: body, translation: "", weight, disabled: false };
+  return { id: uid(), text: body, raw, translation: "", weight, disabled: false };
 }
 
-function serialize(tags) {
+function fmtWeight(w) {
+  return w.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function serialize(tags, under = false) {
   return tags.map(t => {
-    const s = (t.text || "").trim();
+    let s = (t.text || "").trim();
+    if (under) s = s.replace(/_/g, " ");
     if (!s || t.disabled) return "";
     const w = Number(t.weight ?? 1);
-    return Math.abs(w - 1) < 1e-6 ? s : `(${s}:${w.toFixed(2).replace(/0+$/,"").replace(/\.$/,"")})`;
+    return Math.abs(w - 1) < 1e-6 ? s : `(${s}:${fmtWeight(w)})`;
   }).filter(Boolean).join(", ");
+}
+
+// Canonical raw form of one tag — used when the as-typed raw slice is
+// unavailable (legacy saves) or the tag's text/weight was just edited.
+function refreshRaw(t) {
+  const s = (t.text || "").trim();
+  const w = Number(t.weight ?? 1);
+  t.raw = Math.abs(w - 1) < 1e-6 ? s : `(${s}:${fmtWeight(w)})`;
 }
 
 function serializeTranslations(tags) {
@@ -269,8 +283,12 @@ function createTag(node, tag, index, translated) {
   // has no weight control and cannot be edited.
   const csvUnmatched = translated && !(tag.translation || "").trim()
     && node.__pte.lang?.value === CSV_LANG;
+  // Original-box chips show the underscore-converted display form when the
+  // toggle is on; the tag's raw text is kept untouched underneath.
+  const under = !!node.__pte.underCheck?.checked;
+  const shownText = under ? (tag.text || "").replace(/_/g, " ") : (tag.text || "");
   const label = csvUnmatched ? "无法翻译"
-    : (translated ? (tag.translation || tag.text) : tag.text);
+    : (translated ? (tag.translation || shownText) : shownText);
   const missing = translated && !(tag.translation || "").trim();
   if (csvUnmatched) el.classList.add("pte-untrans");
   else if (missing) el.classList.add("pte-missing");
@@ -460,6 +478,7 @@ function createTag(node, tag, index, translated) {
     // under the pointer and close it while the spinner arrows are clicked.
     weightInput.addEventListener("input", e => {
       tag.weight = Number(e.target.value) || 1;
+      refreshRaw(tag);
       node.__pte.syncText();
     });
   }
@@ -477,7 +496,10 @@ function createTag(node, tag, index, translated) {
     const value = window.prompt("编辑 Tag", label);
     if (value == null) return;
     if (translated) tag.translation = value.trim();
-    else tag.text = value.trim();
+    else {
+      tag.text = value.trim();
+      refreshRaw(tag);
+    }
     node.__pte.render();
   });
 
@@ -840,6 +862,12 @@ function build(node, opts = {}) {
     if (state.fmtWrap) state.fmtWrap.style.display = "none";
   }
 
+  // Underscore→space is a pure PROJECTION: tags keep their raw as-typed text
+  // (`t.text` / `t.raw`), and the conversion is applied where text is shown
+  // or output. Unchecking therefore restores the original format.
+  const under = () => !!state.underCheck?.checked;
+  const eff = (s) => (under() ? String(s || "").replace(/_/g, " ") : String(s || ""));
+
   // Grow-only content fit. Two guards against the load/clone inflation:
   // (1) width must be stable across a frame before any fit — right after
   // attachment the container can briefly be narrow, wrapping every tag
@@ -904,8 +932,11 @@ function build(node, opts = {}) {
   // Push current tags/translations into the native (hidden) value widgets.
   // Writing .value goes through the widget's own setter, which updates the
   // frontend widget store (options.setValue) used by queue/save.
+  // `text` is the effective (underscore-converted) form so it always matches
+  // the prompt text; `raw` preserves the as-typed form for restore.
   const tagsStateJson = () => JSON.stringify(state.tags.map(t => ({
-    text: t.text || "",
+    text: eff(t.text),
+    raw: t.raw || (t.text || ""),
     translation: t.translation || "",
     weight: Number(t.weight) || 1,
     disabled: !!t.disabled,
@@ -938,8 +969,27 @@ function build(node, opts = {}) {
   const sepOpts = () => ({ dot: !!state.sepDot?.checked, cn: !!state.sepCn?.checked });
   state.sepOpts = sepOpts;
 
+  // Rewrite the prompt box from the current tags + toggle state:
+  // format on → canonical serialization; format off → each tag's raw
+  // as-typed form (restores underscores / original weight notation).
+  const redrawPrompt = () => {
+    let base;
+    if (autoFormat()) {
+      base = serialize(state.tags, under());
+    } else {
+      base = state.tags
+        .filter(t => !t.disabled && String(t.raw ?? t.text ?? "").trim())
+        .map(t => eff(String(t.raw ?? t.text ?? "")))
+        .join(", ");
+    }
+    const text = base + trailingSeparator(state.prompt.value, sepOpts());
+    state.suppressInput = true;
+    setPromptText(text);
+    state.suppressInput = false;
+  };
+
   state.syncText = () => {
-    const base = serialize(state.tags);
+    const base = serialize(state.tags, under());
     if (autoFormat()) {
       const text = base + trailingSeparator(state.prompt.value, sepOpts());
       if (state.prompt.value !== text) {
@@ -962,9 +1012,11 @@ function build(node, opts = {}) {
   state.rebuildFromText = (text) => {
     const parsed = parsePrompt(text, sepOpts());
     const old = state.tags;
-    const parsedTexts = new Set(parsed.map(p => p.text));
+    // Compare in display form: tags keep raw text (underscores) while the
+    // textarea shows the converted form when the toggle is on.
+    const parsedTexts = new Set(parsed.map(p => eff(p.text).trim()));
     const anchors = new Set(old.filter(t =>
-      t.disabled && !parsedTexts.has((t.text || "").trim())));
+      t.disabled && !parsedTexts.has(eff(t.text).trim())));
 
     if (!anchors.size) { state.tags = parsed; return; }
 
@@ -1049,7 +1101,7 @@ function build(node, opts = {}) {
       // Keep the textarea exactly as typed; only push values to hidden
       // widgets (the prompt widget gets the canonical serialized text so
       // save/load stays consistent even with a trailing comma mid-typing).
-      if (nativePrompt) nativePrompt.value = serialize(state.tags);
+      if (nativePrompt) nativePrompt.value = serialize(state.tags, under());
       if (nativeTranslated) nativeTranslated.value = serializeTranslations(state.tags);
       if (nativeState) nativeState.value = tagsStateJson();
     } else {
@@ -1091,7 +1143,9 @@ function build(node, opts = {}) {
         body: JSON.stringify({
           target_language: state.lang.value,
           dataset: state.dataset?.value || "",
-          tags: state.tags.map(t => ({ text: t.text })),
+          // Translation always sees spaces — underscores are a display/input
+          // convenience, not something the model or lookup needs.
+          tags: state.tags.map(t => ({ text: String(t.text || "").replace(/_/g, " ") })),
         }),
       });
 
@@ -1150,13 +1204,9 @@ function build(node, opts = {}) {
     (underCheck?.checked ? String(text).replace(/_/g, " ") : String(text));
   state.applyUnderscore = applyUnderscore;
   underCheck?.addEventListener("change", () => {
-    const converted = applyUnderscore(state.prompt.value);
-    if (converted !== state.prompt.value) {
-      state.suppressInput = true;
-      setPromptText(converted);
-      state.suppressInput = false;
-    }
-    state.rebuildFromText(state.prompt.value);
+    // Tags keep their raw text; only the display/output projection changes,
+    // so unchecking restores the original underscores.
+    redrawPrompt();
     state.render();
     scheduleAuto(900);
   });
@@ -1169,7 +1219,9 @@ function build(node, opts = {}) {
     fmtCheck.addEventListener("change", () => {
       node.properties = node.properties || {};
       node.properties.pte_auto_format = fmtCheck.checked;
-      if (fmtCheck.checked) state.render(); // turning it back on: re-format now
+      // On: canonical serialization; off: restore each tag's raw as-typed form.
+      redrawPrompt();
+      state.render();
     });
   }
 
@@ -1210,15 +1262,16 @@ function build(node, opts = {}) {
   // Typing keeps raw text (no cursor fighting); tag ops rebuild everything.
   state.prompt.addEventListener("input", () => {
     if (state.suppressInput) return;
-    // Underscore→space is 1:1, so the caret survives the rewrite.
-    if (underCheck.checked && state.prompt.value.includes("_")) {
-      const converted = state.prompt.value.replace(/_/g, " ");
-      state.suppressInput = true;
-      setPromptText(converted);
-      state.suppressInput = false;
-    }
+    // Parse exactly as typed FIRST so each tag captures its raw form
+    // (underscores included) before the display conversion below.
     state.rebuildFromText(state.prompt.value);
     state.render({ keepRaw: true });
+    // Underscore→space display conversion is 1:1, so the caret survives.
+    if (underCheck.checked && state.prompt.value.includes("_")) {
+      state.suppressInput = true;
+      setPromptText(state.prompt.value.replace(/_/g, " "));
+      state.suppressInput = false;
+    }
     scheduleAuto(900);
   });
 
@@ -1230,7 +1283,7 @@ function build(node, opts = {}) {
       // callback. Ignore echoes describing the tags we already have (e.g.
       // the canonical text pushed while typing), otherwise the rewrite
       // would eat spaces/trailing commas mid-edit.
-      if (serialize(parsePrompt(text, sepOpts())) === serialize(state.tags)) return;
+      if (serialize(parsePrompt(text, sepOpts()), under()) === serialize(state.tags, under())) return;
       state.suppressInput = true;
       setPromptText(text);
       state.suppressInput = false;
@@ -1247,18 +1300,28 @@ function build(node, opts = {}) {
     try { saved = JSON.parse(nativeState?.value || "null"); } catch (err) { saved = null; }
 
     if (Array.isArray(saved) &&
-        serialize(saved.filter(t => t && !t.disabled)) === serialize(parsePrompt(text, sepOpts()))) {
+        serialize(saved.filter(t => t && !t.disabled), under()) ===
+        serialize(parsePrompt(text, sepOpts()), under())) {
       // tags_state matches the prompt text: restore the full editor state
-      // (order, weights, translations and disabled flags).
+      // (order, weights, translations and disabled flags). `text` is stored
+      // in effective (converted) form, `raw` in the as-typed form — the raw
+      // slice wins so toggling can restore the original format.
       state.tags = saved
         .filter(t => t && typeof t === "object")
-        .map(t => ({
-          id: uid(),
-          text: String(t.text ?? ""),
-          translation: String(t.translation ?? ""),
-          weight: Number(t.weight) || 1,
-          disabled: !!t.disabled,
-        }));
+        .map(t => {
+          const w = Number(t.weight) || 1;
+          const effText = String(t.text ?? "");
+          const raw = typeof t.raw === "string" && t.raw.trim() ? t.raw : "";
+          return {
+            id: uid(),
+            text: raw || effText,
+            raw: raw ||
+              (Math.abs(w - 1) < 1e-6 ? effText.trim() : `(${effText.trim()}:${fmtWeight(w)})`),
+            translation: String(t.translation ?? ""),
+            weight: w,
+            disabled: !!t.disabled,
+          };
+        });
     } else {
       // External/legacy prompt text: parse it fresh.
       state.tags = parsePrompt(text, sepOpts());

@@ -24,9 +24,11 @@ Built on the modern `comfy_api.latest` / `ComfyExtension` (V3) node API — requ
   "untranslatable". The original node always uses the translation model
   (default: Chinese)
 - **Auto format** toggle (Plus node): when off, editing tags no longer rewrites
-  the prompt box with normalized comma/spacing — your layout is kept as typed
+  the prompt box with normalized comma/spacing; unchecking restores each tag's
+  original as-typed form (original weight notation and underscores)
 - **Underscore → space** toggle: when on, every `_` in the prompt (typed,
-  pasted or inserted from suggestions) becomes a space
+  pasted or inserted from suggestions) becomes a space; unchecking restores
+  the original underscores — the as-typed text is preserved per tag
 - **Extra separators** toggles: optionally split tags on the English period `.`
   and/or the Chinese `，` and `。` as well
 - 8 model-backed target languages: Chinese / Japanese / Korean / English /
