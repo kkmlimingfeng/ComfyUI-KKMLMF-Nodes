@@ -682,10 +682,18 @@ function setupSuggest(node, state, nativeDataset) {
     const next = state.applyUnderscore
       ? state.applyUnderscore(text.slice(0, p.start) + inserted + text.slice(p.end))
       : text.slice(0, p.start) + inserted + text.slice(p.end);
-    state.suppressInput = true;
-    promptEl.value = next;
-    state.suppressInput = false;
-    state.rebuildFromText(next);
+    // Map the insertion back onto the preserved raw text (the display
+    // projection is 1:1) so the original stays restorable; after a canonical
+    // rewrite the inserted text becomes the new raw baseline.
+    let raw = next;
+    if (state.displayIsRaw && (state.rawPrompt ?? "").length === text.length) {
+      raw = state.rawPrompt.slice(0, p.start) + inserted + state.rawPrompt.slice(p.end);
+    }
+    state.rawPrompt = raw;
+    node.properties = node.properties || {};
+    node.properties.pte_raw_prompt = raw;
+    state.setDisplay(next);
+    state.rebuildFromText(raw);
     state.render();
     const caret = p.start + inserted.length;
     try { promptEl.setSelectionRange(caret, caret); } catch (err) { /* ignore */ }
@@ -961,6 +969,21 @@ function build(node, opts = {}) {
     try { el.setSelectionRange(mapPos(s), mapPos(e2)); } catch (err) { /* ignore */ }
   };
 
+  // Whole-prompt original text (verbatim, as typed/loaded). Programmatic
+  // rewrites (canonical serialization) never touch it — unchecking
+  // "下划线转空格" / "自动调整格式" restores it exactly. Persisted via
+  // node.properties so it survives workflow save/load.
+  state.rawPrompt = "";
+  state.lastDisplay = "";
+  state.displayIsRaw = true;
+  const setDisplay = (text) => {
+    state.suppressInput = true;
+    setPromptText(text);
+    state.suppressInput = false;
+    state.lastDisplay = text;
+  };
+  state.setDisplay = setDisplay;
+
   // "自动调整格式"（仅 Plus）：关闭后编辑标签不再把序列化文本写回提示词
   // 输入框，用户输入的逗号/空格排版保持原样（隐藏 widget 仍存规范文本）。
   const autoFormat = () => !state.fmtCheck || state.fmtCheck.checked;
@@ -969,34 +992,27 @@ function build(node, opts = {}) {
   const sepOpts = () => ({ dot: !!state.sepDot?.checked, cn: !!state.sepCn?.checked });
   state.sepOpts = sepOpts;
 
-  // Rewrite the prompt box from the current tags + toggle state:
-  // format on → canonical serialization; format off → each tag's raw
-  // as-typed form (restores underscores / original weight notation).
+  // Rewrite the prompt box from the current toggle state:
+  // format on → canonical serialization; format off → the whole original
+  // text as typed/loaded (underscore-converted for display when needed).
   const redrawPrompt = () => {
-    let base;
     if (autoFormat()) {
-      base = serialize(state.tags, under());
+      setDisplay(serialize(state.tags, under()) +
+        trailingSeparator(state.prompt.value, sepOpts()));
+      state.displayIsRaw = false;
     } else {
-      base = state.tags
-        .filter(t => !t.disabled && String(t.raw ?? t.text ?? "").trim())
-        .map(t => eff(String(t.raw ?? t.text ?? "")))
-        .join(", ");
+      setDisplay(eff(state.rawPrompt));
+      state.displayIsRaw = true;
     }
-    const text = base + trailingSeparator(state.prompt.value, sepOpts());
-    state.suppressInput = true;
-    setPromptText(text);
-    state.suppressInput = false;
   };
 
   state.syncText = () => {
     const base = serialize(state.tags, under());
     if (autoFormat()) {
       const text = base + trailingSeparator(state.prompt.value, sepOpts());
-      if (state.prompt.value !== text) {
-        state.suppressInput = true;
-        setPromptText(text);
-        state.suppressInput = false;
-      }
+      if (state.prompt.value !== text) setDisplay(text);
+      state.lastDisplay = state.prompt.value;
+      state.displayIsRaw = false;
     }
     if (nativePrompt) nativePrompt.value = base;
     if (nativeTranslated) nativeTranslated.value = serializeTranslations(state.tags);
@@ -1232,8 +1248,11 @@ function build(node, opts = {}) {
     check.addEventListener("change", () => {
       node.properties = node.properties || {};
       node.properties[key] = check.checked;
-      // Re-split the prompt with the new separator set.
-      state.rebuildFromText(state.prompt.value);
+      // Re-split the prompt with the new separator set (from the raw text so
+      // the preserved original form is kept).
+      state.rebuildFromText(state.displayIsRaw
+        ? (state.rawPrompt ?? state.prompt.value)
+        : state.prompt.value);
       state.render();
       scheduleAuto(900);
     });
@@ -1262,16 +1281,37 @@ function build(node, opts = {}) {
   // Typing keeps raw text (no cursor fighting); tag ops rebuild everything.
   state.prompt.addEventListener("input", () => {
     if (state.suppressInput) return;
-    // Parse exactly as typed FIRST so each tag captures its raw form
-    // (underscores included) before the display conversion below.
-    state.rebuildFromText(state.prompt.value);
-    state.render({ keepRaw: true });
-    // Underscore→space display conversion is 1:1, so the caret survives.
-    if (underCheck.checked && state.prompt.value.includes("_")) {
-      state.suppressInput = true;
-      setPromptText(state.prompt.value.replace(/_/g, " "));
-      state.suppressInput = false;
+    const v = state.prompt.value;
+    const prevD = state.lastDisplay ?? "";
+    const prevR = state.rawPrompt ?? "";
+    let raw;
+    if (state.displayIsRaw && prevD.length === prevR.length) {
+      // Map the typed edit back onto the raw text: the underscore
+      // conversion is 1:1 (length-preserving), so display offsets equal
+      // raw offsets — underscores typed mid-session are preserved.
+      let p = 0;
+      const maxP = Math.min(prevD.length, v.length);
+      while (p < maxP && prevD[p] === v[p]) p++;
+      let s = 0;
+      const maxS = Math.min(prevD.length - p, v.length - p);
+      while (s < maxS && prevD[prevD.length - 1 - s] === v[v.length - 1 - s]) s++;
+      raw = prevR.slice(0, p) + v.slice(p, v.length - s) + prevR.slice(prevR.length - s);
+    } else {
+      // The display had been canonically rewritten (tag ops with format
+      // on): the typed text becomes the new raw baseline.
+      raw = v;
     }
+    state.rawPrompt = raw;
+    node.properties = node.properties || {};
+    node.properties.pte_raw_prompt = raw;
+    // Parse the RAW text so tags capture underscores before the display
+    // conversion below.
+    state.rebuildFromText(raw);
+    state.render({ keepRaw: true });
+    state.displayIsRaw = true;
+    const disp = eff(raw);
+    if (disp !== v) setDisplay(disp);
+    else state.lastDisplay = v;
     scheduleAuto(900);
   });
 
@@ -1287,6 +1327,12 @@ function build(node, opts = {}) {
       state.suppressInput = true;
       setPromptText(text);
       state.suppressInput = false;
+      // External edit: it becomes the new raw baseline.
+      state.rawPrompt = text;
+      state.lastDisplay = state.prompt.value;
+      state.displayIsRaw = true;
+      node.properties = node.properties || {};
+      node.properties.pte_raw_prompt = text;
       state.rebuildFromText(text);
       state.render();
       scheduleAuto(900);
@@ -1296,6 +1342,19 @@ function build(node, opts = {}) {
   // Initial sync from the native widgets + re-sync after workflow loads.
   const resyncFromNative = () => {
     const text = String(nativePrompt?.value ?? "");
+    // Restore the preserved original text when it still describes the same
+    // tags; external edits fall back to the current prompt text.
+    const savedRaw = typeof node.properties?.pte_raw_prompt === "string"
+      ? node.properties.pte_raw_prompt : "";
+    let rawText = text;
+    if (savedRaw) {
+      try {
+        if (serialize(parsePrompt(savedRaw, sepOpts()), under()) ===
+            serialize(parsePrompt(text, sepOpts()), under())) {
+          rawText = savedRaw;
+        }
+      } catch (err) { /* fall back to the prompt text */ }
+    }
     let saved = null;
     try { saved = JSON.parse(nativeState?.value || "null"); } catch (err) { saved = null; }
 
@@ -1326,9 +1385,17 @@ function build(node, opts = {}) {
       // External/legacy prompt text: parse it fresh.
       state.tags = parsePrompt(text, sepOpts());
     }
+    state.rawPrompt = rawText;
+    state.displayIsRaw = true;
+    node.properties = node.properties || {};
+    node.properties.pte_raw_prompt = rawText;
     state.suppressInput = true;
     state.prompt.value = text;
     state.suppressInput = false;
+    // Format off: show the preserved original text (underscore-projected).
+    // Format on: render() below rewrites the display canonically.
+    if (!autoFormat()) setPromptText(eff(rawText));
+    state.lastDisplay = state.prompt.value;
     if (nativeLang && nativeLang.value &&
         [...state.lang.options].some(o => o.value === nativeLang.value)) {
       state.lang.value = nativeLang.value;
