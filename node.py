@@ -292,11 +292,23 @@ _dataset_cache = {}  # filename -> {"mtime": float, "rows": list}
 
 
 def _list_datasets():
-    """CSV files available in the data/ folder (sorted by name)."""
+    """CSV files available in the data/ folder (sorted by name). The two
+    known dataset names are always listed even when the files are missing
+    (the datasets are not shipped with the package — see _DATASET_DOWNLOAD_HINT)."""
     try:
-        return sorted(p.name for p in _DATA_DIR.glob("*.csv") if p.is_file())
+        found = [p.name for p in _DATA_DIR.glob("*.csv") if p.is_file()]
     except OSError:
-        return []
+        found = []
+    for known in ("tags_merged.csv", "tags_merged_anima.csv"):
+        if known not in found:
+            found.append(known)
+    return sorted(found)
+
+
+_DATASET_DOWNLOAD_HINT = (
+    "词库未随插件发布：请到 https://github.com/kkmlimingfeng/ComfyUI-KKMLMF-Nodes/releases "
+    "下载数据集 CSV，放入 ComfyUI/custom_nodes/ComfyUI-KKMLMF-Nodes/data/ 目录后重启 ComfyUI"
+)
 
 
 def _load_dataset(name):
@@ -310,7 +322,7 @@ def _load_dataset(name):
         raise ValueError("数据集名为空")
     path = _DATA_DIR / safe
     if not path.is_file():
-        raise ValueError(f"数据集不存在: {safe}")
+        raise ValueError(f"数据集不存在: {safe} — {_DATASET_DOWNLOAD_HINT}")
 
     try:
         mtime = path.stat().st_mtime
@@ -442,7 +454,7 @@ def csv_translate(texts, dataset=""):
     else:
         datasets = _list_datasets()
     if not datasets:
-        raise ValueError("data 目录下没有数据集 CSV，无法进行词库直译")
+        raise ValueError(f"data 目录下没有数据集 CSV，无法进行词库直译 — {_DATASET_DOWNLOAD_HINT}")
     out = []
     for t in texts:
         if _has_cjk(t):
@@ -476,7 +488,7 @@ async def prompt_tag_editor_suggest(request):
     if not dataset:
         datasets = _list_datasets()
         if not datasets:
-            return web.json_response({"ok": False, "error": "data 目录下没有数据集 CSV"}, status=400)
+            return web.json_response({"ok": False, "error": f"data 目录下没有数据集 CSV — {_DATASET_DOWNLOAD_HINT}"}, status=400)
         dataset = datasets[0]
 
     try:

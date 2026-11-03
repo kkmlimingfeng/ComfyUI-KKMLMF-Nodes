@@ -101,6 +101,14 @@ pip install llama-cpp-python
 4. 打开**自动**开关可在编辑后自动翻译，或点击 **↻** 按钮手动翻译。
 5. 将输出连接到下游节点。
 
+## 词库数据集（联想 / 词库直译）
+
+词库 CSV（`tags_merged.csv`、`tags_merged_anima.csv`）**不随插件包发布**（registry
+内容审核会标记原始 danbooru 词表）。数据集下拉框始终显示这两个名字；使用时请到
+[GitHub Releases](https://github.com/kkmlimingfeng/ComfyUI-KKMLMF-Nodes/releases)
+下载 CSV，放入 `ComfyUI/custom_nodes/ComfyUI-KKMLMF-Nodes/data/` 目录（没有就新建），
+然后重启 ComfyUI。
+
 ## 许可证
 
 [MIT](LICENSE)

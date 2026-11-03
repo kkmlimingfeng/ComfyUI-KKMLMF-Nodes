@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .ruff_cache/
 debug.log
+# Tag datasets are NOT shipped with the package (registry content review
+# flags the raw danbooru vocabulary). Users download them from the GitHub
+# Releases page into this folder.
+data/

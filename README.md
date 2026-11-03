@@ -110,6 +110,15 @@ pip install llama-cpp-python
 4. Toggle **自动 (auto)** to translate automatically after edits, or press the **↻** button.
 5. Connect the outputs to downstream nodes.
 
+## Tag datasets (suggestions & CSV translation)
+
+The dataset CSVs (`tags_merged.csv`, `tags_merged_anima.csv`) are **not bundled
+with the package** (registry content review flags the raw danbooru vocabulary).
+The dataset dropdown always lists both names; when you use one, download the
+CSVs from the [GitHub Releases](https://github.com/kkmlimingfeng/ComfyUI-KKMLMF-Nodes/releases)
+page and put them into `ComfyUI/custom_nodes/ComfyUI-KKMLMF-Nodes/data/`
+(create the folder if needed), then restart ComfyUI.
+
 ## License
 
 [MIT](LICENSE)
