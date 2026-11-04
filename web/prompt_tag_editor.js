@@ -417,6 +417,9 @@ function createTag(node, tag, index, translated) {
     // box is updated in place (no re-render) so a fast double-click still
     // lands on the same element and the edit prompt keeps working.
     tag.disabled = !tag.disabled;
+    // Keep the preserved raw text in sync: cut the slice out on disable,
+    // put it back on re-enable ("自动调整格式" off mode).
+    pte.applyTagSetToRaw?.();
     for (const box of [pte.original, pte.translated]) {
       const twin = box.querySelector(`.pte-tag[data-uid="${tag.id}"]`);
       if (twin) twin.classList.toggle("pte-disabled", !!tag.disabled);
@@ -485,8 +488,12 @@ function createTag(node, tag, index, translated) {
 
   pop.querySelector("button").addEventListener("click", e => {
     e.stopPropagation();
-    node.__pte.tags.splice(index, 1);
-    node.__pte.render();
+    const pte = node.__pte;
+    const i = pte.tags.indexOf(tag);
+    if (i >= 0) pte.tags.splice(i, 1);
+    // Cut the deleted tag's slice out of the preserved raw text too.
+    pte.applyTagSetToRaw?.(tag);
+    pte.render();
   });
 
   // Double click edits the tag text (not for untranslatable CSV chips).
@@ -1004,6 +1011,79 @@ function build(node, opts = {}) {
       setDisplay(eff(state.rawPrompt));
       state.displayIsRaw = true;
     }
+  };
+
+  // Surgical raw-text edits for disable / enable / delete while "自动调整格
+  // 式" is off: cut the affected tag's slice out of the preserved original
+  // text (or re-insert it on re-enable) without reformatting anything else.
+  const locateSlices = (raw) => {
+    let pos = 0;
+    const locs = new Map();
+    for (const t of state.tags) {
+      const slice = String(t.raw ?? t.text ?? "");
+      if (!slice) continue;
+      const i = raw.indexOf(slice, pos);
+      if (i < 0) continue;
+      locs.set(t, { start: i, end: i + slice.length });
+      pos = i + slice.length;
+    }
+    return locs;
+  };
+
+  state.applyTagSetToRaw = (removedTag) => {
+    if (autoFormat()) return; // format on: syncText rewrites canonically
+    let raw = String(state.rawPrompt ?? "");
+    if (!raw) return;
+    const SEPS = "[,，。．]";
+    const insertSlice = (text, tag) => {
+      const slice = String(tag.raw ?? tag.text ?? "").trim();
+      if (!slice) return text;
+      const locs = locateSlices(text);
+      const idx = state.tags.indexOf(tag);
+      // After the previous tag (consuming its trailing separator) — this
+      // puts the slice back at its original spot.
+      for (let i = idx - 1; i >= 0; i--) {
+        const loc = locs.get(state.tags[i]);
+        if (!loc) continue;
+        let end = loc.end;
+        const m = text.slice(end).match(new RegExp(`^\\s*${SEPS}\\s*`));
+        if (m) end += m[0].length;
+        return text.slice(0, end) + slice + text.slice(end);
+      }
+      // Before the next tag.
+      for (let i = idx + 1; i < state.tags.length; i++) {
+        const loc = locs.get(state.tags[i]);
+        if (!loc) continue;
+        return text.slice(0, loc.start) + slice + ", " + text.slice(loc.start);
+      }
+      const trimmed = text.replace(/\s+$/, "");
+      return trimmed + (/[,，。．]$/.test(trimmed) ? " " : ", ") + slice;
+    };
+    // 1) Re-enabled tags whose slice was cut earlier: put it back.
+    for (const t of state.tags) {
+      if (t.disabled || locateSlices(raw).has(t)) continue;
+      raw = insertSlice(raw, t);
+    }
+    // 2) Disabled / deleted tags: cut the slice plus one separator.
+    const gone = state.tags.filter(t => t.disabled);
+    if (removedTag) gone.push(removedTag);
+    for (const t of gone) {
+      const loc = locateSlices(raw).get(t);
+      if (!loc) continue;
+      let { start, end } = loc;
+      const after = raw.slice(end).match(new RegExp(`^${SEPS}\\s*`));
+      if (after) end += after[0].length;
+      else {
+        const before = raw.slice(0, start).match(new RegExp(`\\s*${SEPS}$`));
+        if (before) start -= before[0].length;
+      }
+      raw = raw.slice(0, start) + raw.slice(end);
+    }
+    state.rawPrompt = raw;
+    node.properties = node.properties || {};
+    node.properties.pte_raw_prompt = raw;
+    setDisplay(eff(raw));
+    state.displayIsRaw = true;
   };
 
   state.syncText = () => {
