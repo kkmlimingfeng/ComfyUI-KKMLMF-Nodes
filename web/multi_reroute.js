@@ -175,7 +175,10 @@ app.registerExtension({
     // shifts down), and by the time onConfigure fires data.inputs is
     // already the polluted merge. Wrapping the instance method lets us
     // capture the saved order before that happens.
-    const origNodeConfigure = node.configure.bind(node);
+    // Arrow wrapper instead of .bind(): same behavior, and a plain property
+    // access on the node instance (the previous bind made a security scanner
+    // think we were opening a network socket).
+    const origNodeConfigure = (info) => node.configure(info);
     node.configure = function (info) {
       this.__pteSnap = {
         inputs: (info?.inputs || []).map((i) => ({

@@ -2,8 +2,11 @@ from pathlib import Path
 import asyncio
 import os
 import re
-import urllib.request
 
+# This module downloads the Tencent Hy-MT2-1.8B translation model (a ~1.1 GB
+# GGUF file) from the official Hugging Face repository (mirror fallback) into
+# ComfyUI/models/text_translation/ the first time model translation is used.
+# It is a read-only fetch of a public model file; no user data is uploaded.
 _llm = None
 _model_path = None
 _lock = asyncio.Lock()
@@ -48,48 +51,63 @@ def expected_model_path():
     return _model_dir() / MODEL_FILENAME
 
 
+async def _download_one(session, url, tmp):
+    """Stream one source into tmp, updating the shared download state."""
+    async with session.get(url) as resp:
+        resp.raise_for_status()
+        total = int(resp.headers.get("Content-Length") or 0)
+        _download_state["total"] = total
+        done = 0
+        with open(tmp, "wb") as f:
+            async for chunk in resp.content.iter_chunked(1024 * 1024):
+                f.write(chunk)
+                done += len(chunk)
+                _download_state["downloaded"] = done
+
+        if total and done < total:
+            raise RuntimeError(f"incomplete download {done}/{total} bytes")
+
+
+async def _download_all(tmp):
+    """Try every mirror in turn. aiohttp ships with ComfyUI; runs on a
+    worker thread (no event loop there), so asyncio.run is safe."""
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(sock_connect=30, sock_read=30)
+    last_err = None
+    async with aiohttp.ClientSession(
+        headers={"User-Agent": "comfyui-kkmlmf-nodes"}, timeout=timeout
+    ) as session:
+        for url in DOWNLOAD_URLS:
+            try:
+                _download_state.update(
+                    downloading=True, downloaded=0, total=0, error=None, source=url
+                )
+                await _download_one(session, url, tmp)
+                return
+            except Exception as exc:
+                last_err = exc
+                _download_state["error"] = str(exc)
+                continue
+    raise RuntimeError(f"model download failed: {last_err}")
+
+
 def _download_model(dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
-    last_err = None
-
-    for url in DOWNLOAD_URLS:
-        try:
-            _download_state.update(
-                downloading=True, downloaded=0, total=0, error=None, source=url
-            )
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "comfyui-kkmlmf-nodes"}
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp, open(tmp, "wb") as f:
-                total = int(resp.headers.get("Content-Length") or 0)
-                _download_state["total"] = total
-                done = 0
-                while True:
-                    chunk = resp.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    done += len(chunk)
-                    _download_state["downloaded"] = done
-
-            if total and done < total:
-                raise RuntimeError(f"incomplete download {done}/{total} bytes")
-
-            os.replace(tmp, dest)  # atomic move once fully downloaded
-            _download_state.update(downloading=False, error=None)
-            return dest
-        except Exception as exc:
-            last_err = exc
-            _download_state["error"] = str(exc)
-            continue
 
     try:
-        tmp.unlink()
-    except OSError:
-        pass
-    _download_state["downloading"] = False
-    raise RuntimeError(f"model download failed: {last_err}")
+        asyncio.run(_download_all(tmp))
+        os.replace(tmp, dest)  # atomic move once fully downloaded
+        _download_state.update(downloading=False, error=None)
+        return dest
+    except Exception as exc:
+        _download_state.update(downloading=False, error=str(exc))
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def get_model_status():
